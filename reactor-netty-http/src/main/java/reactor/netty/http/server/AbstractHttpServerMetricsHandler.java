@@ -163,7 +163,7 @@ abstract class AbstractHttpServerMetricsHandler extends ChannelDuplexHandler {
 	public void write(ChannelHandlerContext ctx, Object msg, ChannelPromise promise) {
 		try {
 			if (msg instanceof HttpResponse) {
-				if (((HttpResponse) msg).status().equals(HttpResponseStatus.CONTINUE)) {
+				if (((HttpResponse) msg).status().code() == HttpResponseStatus.CONTINUE.code()) {
 					//"FutureReturnValueIgnored" this is deliberate
 					ctx.write(msg, promise);
 					return;
@@ -174,7 +174,7 @@ abstract class AbstractHttpServerMetricsHandler extends ChannelDuplexHandler {
 					HttpServerOperations ops = (HttpServerOperations) channelOps;
 					if (!initialized) {
 						method = methodTagValue.apply(ops.method().name());
-						path = uriTagValue == null ? ops.path : uriTagValue.apply(ops.path);
+						path = uriTagValue == null ? resolvePath(ops) : uriTagValue.apply(resolvePath(ops));
 						// Always take the remote address from the operations in order to consider proxy information
 						// Use remoteSocketAddress() in order to obtain UDS info
 						remoteSocketAddress = ops.remoteSocketAddress();
@@ -249,7 +249,7 @@ abstract class AbstractHttpServerMetricsHandler extends ChannelDuplexHandler {
 				if (channelOps instanceof HttpServerOperations) {
 					ops = (HttpServerOperations) channelOps;
 					method = methodTagValue.apply(ops.method().name());
-					path = uriTagValue == null ? ops.path : uriTagValue.apply(ops.path);
+					path = uriTagValue == null ? resolvePath(ops) : uriTagValue.apply(resolvePath(ops));
 					// Always take the remote address from the operations in order to consider proxy information
 					// Use remoteSocketAddress() in order to obtain UDS info
 					remoteSocketAddress = ops.remoteSocketAddress();
@@ -296,7 +296,9 @@ abstract class AbstractHttpServerMetricsHandler extends ChannelDuplexHandler {
 	@Override
 	public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
 		try {
-			recordException();
+			if (path != null) {
+				recordException();
+			}
 		}
 		catch (RuntimeException e) {
 			// Allow request-response exchange to continue, unaffected by metrics problem
@@ -437,6 +439,15 @@ abstract class AbstractHttpServerMetricsHandler extends ChannelDuplexHandler {
 		path = null;
 		remoteSocketAddress = null;
 		status = null;
+	}
+
+	static String resolvePath(HttpServerOperations ops) {
+		try {
+			return ops.fullPath();
+		}
+		catch (Exception e) {
+			return "/bad-request";
+		}
 	}
 
 	static final Set<String> STANDARD_METHODS;
