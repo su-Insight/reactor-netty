@@ -295,13 +295,13 @@ By default, the `HTTP` server is configured with the following settings:
 {http-source-link}/reactor/netty/http/HttpDecoderSpec.java
 [%unbreakable]
 ----
-include::{sourcedir}/reactor/netty/http/HttpDecoderSpec.java[lines=28..39]
+include::{sourcedir}/reactor/netty/http/HttpDecoderSpec.java[lines=28..40]
 ----
 
 {http-source-link}/reactor/netty/http/server/HttpRequestDecoderSpec.java
 [%unbreakable]
 ----
-include::{sourcedir}/reactor/netty/http/server/HttpRequestDecoderSpec.java[lines=41..46]
+include::{sourcedir}/reactor/netty/http/server/HttpRequestDecoderSpec.java[lines=42..47]
 ----
 
 When you need to change these default settings, you can configure the `HTTP` server as follows:
@@ -501,7 +501,7 @@ hello
 
 {http-source-link}/reactor/netty/http/HttpProtocol.java
 ----
-include::{sourcedir}/reactor/netty/http/HttpProtocol.java[lines=24..58]
+include::{sourcedir}/reactor/netty/http/HttpProtocol.java[lines=26..61]
 ----
 
 [[HTTP3]]
@@ -618,7 +618,7 @@ include::{examples-dir}/tracing/Application.java[lines=18..91]
 
 The result in `Zipkin` looks like:
 
-image::http-server-tracing.png[]
+image::http-server-tracing.png[role="invert-dark"]
 
 [[access-current-observation]]
 === Access Current Observation
@@ -646,13 +646,14 @@ You may also need to configure the Reactor Netty `ObservationHandlers` using the
 
 [[unix-domain-sockets]]
 == Unix Domain Sockets
-The `HTTP` server supports Unix Domain Sockets (UDS) when native transport is in use.
+The `HTTP` server supports Unix Domain Sockets (UDS) when native transport is in use for all java versions
+and when NIO transport is in use for java 17 and above.
 
 The following example shows how to use UDS support:
 
 {examples-link}/uds/Application.java
 ----
-include::{examples-dir}/uds/Application.java[lines=18..33]
+include::{examples-dir}/uds/Application.java[lines=18..38]
 ----
 <1> Specifies `DomainSocketAddress` that will be used
 

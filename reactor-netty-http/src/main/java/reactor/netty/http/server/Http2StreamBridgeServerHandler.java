@@ -27,7 +27,10 @@ import io.netty.channel.ChannelDuplexHandler;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelPromise;
 import io.netty.handler.codec.DecoderResult;
+import io.netty.handler.codec.http.DefaultFullHttpResponse;
 import io.netty.handler.codec.http.DefaultHttpContent;
+import io.netty.handler.codec.http.DefaultHttpResponse;
+import io.netty.handler.codec.http.DefaultLastHttpContent;
 import io.netty.handler.codec.http.HttpObject;
 import io.netty.handler.codec.http.HttpRequest;
 import io.netty.handler.codec.http.HttpResponse;
@@ -46,6 +49,7 @@ import reactor.netty.http.logging.HttpMessageArgProviderFactory;
 import reactor.netty.http.logging.HttpMessageLogFactory;
 import reactor.util.annotation.Nullable;
 
+import static io.netty.handler.codec.http.LastHttpContent.EMPTY_LAST_CONTENT;
 import static reactor.netty.ReactorNetty.format;
 
 /**
@@ -146,12 +150,13 @@ final class Http2StreamBridgeServerHandler extends ChannelDuplexHandler {
 						readTimeout,
 						requestTimeout,
 						secured,
-						timestamp);
+						timestamp,
+						true);
 			}
 			catch (RuntimeException e) {
 				pendingResponse = false;
 				request.setDecoderResult(DecoderResult.failure(e.getCause() != null ? e.getCause() : e));
-				HttpServerOperations.sendDecodingFailures(ctx, listener, secured, e, msg, httpMessageLogFactory, true, timestamp, connectionInfo, remoteAddress);
+				HttpServerOperations.sendDecodingFailures(ctx, listener, secured, e, msg, httpMessageLogFactory, true, timestamp, connectionInfo, remoteAddress, true);
 				return;
 			}
 			ops.bind();
@@ -174,7 +179,24 @@ final class Http2StreamBridgeServerHandler extends ChannelDuplexHandler {
 	@Override
 	@SuppressWarnings("FutureReturnValueIgnored")
 	public void write(ChannelHandlerContext ctx, Object msg, ChannelPromise promise) {
-		if (msg instanceof ByteBuf) {
+		Class<?> msgClass = msg.getClass();
+		if (msgClass == DefaultHttpResponse.class) {
+			//"FutureReturnValueIgnored" this is deliberate
+			ctx.write(msg, promise);
+		}
+		else if (msgClass == DefaultFullHttpResponse.class) {
+			//"FutureReturnValueIgnored" this is deliberate
+			ctx.write(msg, promise);
+			if (HttpResponseStatus.CONTINUE.code() == ((DefaultFullHttpResponse) msg).status().code()) {
+				return;
+			}
+			finalizeResponse(ctx);
+		}
+		else if (msg == EMPTY_LAST_CONTENT || msgClass == DefaultLastHttpContent.class) {
+			ctx.write(msg, promise);
+			finalizeResponse(ctx);
+		}
+		else if (msg instanceof ByteBuf) {
 			if (!pendingResponse) {
 				if (HttpServerOperations.log.isDebugEnabled()) {
 					HttpServerOperations.log.debug(
@@ -188,7 +210,7 @@ final class Http2StreamBridgeServerHandler extends ChannelDuplexHandler {
 			//"FutureReturnValueIgnored" this is deliberate
 			ctx.write(new DefaultHttpContent((ByteBuf) msg), promise);
 		}
-		else if (msg instanceof HttpResponse && HttpResponseStatus.CONTINUE.equals(((HttpResponse) msg).status())) {
+		else if (msg instanceof HttpResponse && HttpResponseStatus.CONTINUE.code() == ((HttpResponse) msg).status().code()) {
 			//"FutureReturnValueIgnored" this is deliberate
 			ctx.write(msg, promise);
 		}
@@ -196,9 +218,13 @@ final class Http2StreamBridgeServerHandler extends ChannelDuplexHandler {
 			//"FutureReturnValueIgnored" this is deliberate
 			ctx.write(msg, promise);
 			if (msg instanceof LastHttpContent) {
-				pendingResponse = false;
-				ctx.read();
+				finalizeResponse(ctx);
 			}
 		}
+	}
+
+	void finalizeResponse(ChannelHandlerContext ctx) {
+		pendingResponse = false;
+		ctx.read();
 	}
 }

@@ -122,6 +122,7 @@ public final class HttpClientConfig extends ClientTransportConfig<HttpClientConf
 	@Override
 	public int channelHash() {
 		int result = super.channelHash();
+		result = 31 * result + Boolean.hashCode(acceptBrotli);
 		result = 31 * result + Boolean.hashCode(acceptGzip);
 		result = 31 * result + Objects.hashCode(decoder);
 		result = 31 * result + _protocols;
@@ -209,6 +210,15 @@ public final class HttpClientConfig extends ClientTransportConfig<HttpClientConf
 	@Nullable
 	public Http3SettingsSpec http3SettingsSpec() {
 		return http3Settings;
+	}
+
+	/**
+	 * Return whether Brotli compression is enabled.
+	 *
+	 * @return whether Brotli compression is enabled
+	 */
+	public boolean isAcceptBrotli() {
+		return acceptBrotli;
 	}
 
 	/**
@@ -331,6 +341,7 @@ public final class HttpClientConfig extends ClientTransportConfig<HttpClientConf
 
 	// Protected/Package private write API
 
+	boolean acceptBrotli;
 	boolean acceptGzip;
 	String baseUrl;
 	BiFunction<? super HttpClientRequest, ? super NettyOutbound, ? extends Publisher<Void>> body;
@@ -363,10 +374,15 @@ public final class HttpClientConfig extends ClientTransportConfig<HttpClientConf
 	String uriStr;
 	Function<String, String> uriTagValue;
 	WebsocketClientSpec websocketClientSpec;
+	boolean h2Heartbeat;
+	Duration h2HeartbeatTime;
+	Duration h2HeartbeatTimeout;
+	int maxH2HeartbeatFailedTimes;
 
 	HttpClientConfig(HttpConnectionProvider connectionProvider, Map<ChannelOption<?>, ?> options,
 			Supplier<? extends SocketAddress> remoteAddress) {
 		super(connectionProvider, options, remoteAddress);
+		this.acceptBrotli = false;
 		this.acceptGzip = false;
 		this.cookieDecoder = ClientCookieDecoder.STRICT;
 		this.cookieEncoder = ClientCookieEncoder.STRICT;
@@ -381,6 +397,7 @@ public final class HttpClientConfig extends ClientTransportConfig<HttpClientConf
 
 	HttpClientConfig(HttpClientConfig parent) {
 		super(parent);
+		this.acceptBrotli = parent.acceptBrotli;
 		this.acceptGzip = parent.acceptGzip;
 		this.baseUrl = parent.baseUrl;
 		this.body = parent.body;
@@ -413,13 +430,17 @@ public final class HttpClientConfig extends ClientTransportConfig<HttpClientConf
 		this.uriStr = parent.uriStr;
 		this.uriTagValue = parent.uriTagValue;
 		this.websocketClientSpec = parent.websocketClientSpec;
+		this.h2Heartbeat = parent.h2Heartbeat;
+		this.h2HeartbeatTime = parent.h2HeartbeatTime;
+		this.h2HeartbeatTimeout = parent.h2HeartbeatTimeout;
+		this.maxH2HeartbeatFailedTimes = parent.maxH2HeartbeatFailedTimes;
 	}
 
 	@Override
 	public ChannelInitializer<Channel> channelInitializer(ConnectionObserver connectionObserver,
 			@Nullable SocketAddress remoteAddress, boolean onServer) {
 		ChannelInitializer<Channel> channelInitializer = super.channelInitializer(connectionObserver, remoteAddress, onServer);
-		return (_protocols & h3) == h3 ? new Http3ChannelInitializer(this, channelInitializer, connectionObserver) : channelInitializer;
+		return (_protocols & h3) == h3 ? new Http3ChannelInitializer(this, channelInitializer, connectionObserver, remoteAddress) : channelInitializer;
 	}
 
 	/**
@@ -492,6 +513,11 @@ public final class HttpClientConfig extends ClientTransportConfig<HttpClientConf
 	@Override
 	protected void proxyProvider(ProxyProvider proxyProvider) {
 		super.proxyProvider(proxyProvider);
+	}
+
+	@Override
+	protected void proxyProviderSupplier(Supplier<ProxyProvider> proxyProviderSupplier) {
+		super.proxyProviderSupplier(proxyProviderSupplier);
 	}
 
 	@Override
@@ -709,7 +735,8 @@ public final class HttpClientConfig extends ClientTransportConfig<HttpClientConf
 		             .setMaxChunkSize(decoder.maxChunkSize())
 		             .setValidateHeaders(decoder.validateHeaders())
 		             .setInitialBufferSize(decoder.initialBufferSize())
-		             .setAllowDuplicateContentLengths(decoder.allowDuplicateContentLengths());
+		             .setAllowDuplicateContentLengths(decoder.allowDuplicateContentLengths())
+		             .setAllowPartialChunks(decoder.allowPartialChunks());
 		HttpClientCodec httpClientCodec =
 				new HttpClientCodec(decoderConfig, decoder.failOnMissingResponse, decoder.parseHttpAfterConnectRequest);
 
@@ -771,7 +798,8 @@ public final class HttpClientConfig extends ClientTransportConfig<HttpClientConf
 		             .setMaxChunkSize(decoder.maxChunkSize())
 		             .setValidateHeaders(decoder.validateHeaders())
 		             .setInitialBufferSize(decoder.initialBufferSize())
-		             .setAllowDuplicateContentLengths(decoder.allowDuplicateContentLengths());
+		             .setAllowDuplicateContentLengths(decoder.allowDuplicateContentLengths())
+		             .setAllowPartialChunks(decoder.allowPartialChunks());
 		p.addBefore(NettyPipeline.ReactiveBridge,
 				NettyPipeline.HttpCodec,
 				new HttpClientCodec(decoderConfig, decoder.failOnMissingResponse, decoder.parseHttpAfterConnectRequest));
@@ -1033,6 +1061,10 @@ public final class HttpClientConfig extends ClientTransportConfig<HttpClientConf
 		final SocketAddress                              proxyAddress;
 		final SslProvider                                sslProvider;
 		final Function<String, String>                   uriTagValue;
+		final boolean                                    heartbeat;
+		final Duration                                   heartbeatTime;
+		final Duration                                   heartbeatTimeout;
+		final int                                        maxH2HeartbeatFailedTimes;
 
 		HttpClientChannelInitializer(HttpClientConfig config) {
 			this.acceptGzip = config.acceptGzip;
@@ -1041,9 +1073,13 @@ public final class HttpClientConfig extends ClientTransportConfig<HttpClientConf
 			this.metricsRecorder = config.metricsRecorderInternal();
 			this.opsFactory = config.channelOperationsProvider();
 			this.protocols = config._protocols;
-			this.proxyAddress = config.proxyProvider() != null ? config.proxyProvider().getSocketAddress().get() : null;
+			this.proxyAddress = config.proxyProvider() != null ? config.proxyProvider().getProxyAddress() : null;
 			this.sslProvider = config.sslProvider;
 			this.uriTagValue = config.uriTagValue;
+			this.heartbeat = config.h2Heartbeat;
+			this.heartbeatTime = config.h2HeartbeatTime;
+			this.heartbeatTimeout = config.h2HeartbeatTimeout;
+			this.maxH2HeartbeatFailedTimes = config.maxH2HeartbeatFailedTimes;
 		}
 
 		@Override
@@ -1078,6 +1114,9 @@ public final class HttpClientConfig extends ClientTransportConfig<HttpClientConf
 				else if ((protocols & h2c) == h2c) {
 					configureHttp2Pipeline(channel.pipeline(), decoder, http2Settings, observer);
 				}
+			}
+			if (heartbeat && (protocols & h2) == h2) {
+				channel.pipeline().addLast(new H2ClientHeartbeatHandler(heartbeatTime, heartbeatTimeout, maxH2HeartbeatFailedTimes));
 			}
 		}
 	}

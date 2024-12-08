@@ -30,6 +30,7 @@ import java.util.function.Supplier;
 
 import io.netty.buffer.ByteBuf;
 import io.netty.handler.codec.DecoderException;
+import io.netty.handler.codec.compression.Brotli;
 import io.netty.handler.codec.http.HttpHeaderNames;
 import io.netty.handler.codec.http.HttpHeaderValues;
 import io.netty.handler.codec.http.HttpHeaders;
@@ -515,30 +516,46 @@ public abstract class HttpClient extends ClientTransport<HttpClient, HttpClientC
 	}
 
 	/**
-	 * Specifies whether GZip compression is enabled.
+	 * Specifies whether compression (gzip, Brotli, and zstd) is enabled.
 	 *
-	 * @param compressionEnabled if true GZip compression is enabled otherwise disabled (default: false)
+	 * <p>Note: Brotli and zstd compressions require additional dependencies.
+	 *
+	 * <p>Note: For zstd compression, {@literal Accept-Encoding: zstd} header needs to be added explicitly.
+	 *
+	 * @param compressionEnabled if true, compression (gzip, Brotli, and zstd) is enabled, otherwise disabled (default: false)
 	 * @return a new {@link HttpClient}
 	 */
 	public final HttpClient compress(boolean compressionEnabled) {
 		if (compressionEnabled) {
+			// Enabling the compression means at least "acceptGzip" is enabled.
+			// So we can use "acceptGzip" as a flag for the compression.
 			if (!configuration().acceptGzip) {
 				HttpClient dup = duplicate();
+				HttpClientConfig config = dup.configuration();
 				HttpHeaders headers = configuration().headers.copy();
 				headers.add(HttpHeaderNames.ACCEPT_ENCODING, HttpHeaderValues.GZIP);
-				dup.configuration().headers = headers;
-				dup.configuration().acceptGzip = true;
+				config.acceptGzip = true;
+
+				if (Brotli.isAvailable()) {
+					headers.add(HttpHeaderNames.ACCEPT_ENCODING, HttpHeaderValues.BR);
+					config.acceptBrotli = true;
+				}
+
+				config.headers = headers;
+
 				return dup;
 			}
 		}
 		else if (configuration().acceptGzip) {
 			HttpClient dup = duplicate();
+			HttpClientConfig config = dup.configuration();
 			if (isCompressing(configuration().headers)) {
 				HttpHeaders headers = configuration().headers.copy();
 				headers.remove(HttpHeaderNames.ACCEPT_ENCODING);
-				dup.configuration().headers = headers;
+				config.headers = headers;
 			}
-			dup.configuration().acceptGzip = false;
+			config.acceptGzip = false;
+			config.acceptBrotli = false;
 			return dup;
 		}
 		return this;
@@ -1298,6 +1315,92 @@ public abstract class HttpClient extends ClientTransport<HttpClient, HttpClientC
 		return this;
 	}
 
+	/**
+	 * Enable or Disable heartbeat support for the client.
+	 *
+	 * @param enableH2Heartbeat enableH2Heartbeat true if heartbeat should be enabled (default: false)
+	 * @return a new {@link HttpClient}
+	 */
+	public final HttpClient enableH2Heartbeat(boolean enableH2Heartbeat) {
+		HttpClient dup = duplicate();
+		dup.configuration().h2Heartbeat = enableH2Heartbeat;
+		return dup;
+	}
+
+	public final HttpClient enableH2Heartbeat(Supplier<Boolean> enableH2Heartbeat) {
+		HttpClient dup = duplicate();
+		dup.configuration().h2Heartbeat = enableH2Heartbeat.get();
+		return dup;
+	}
+
+	/**
+	 * The interval between PING frames.
+	 *
+	 * @param heartbeatTime the interval between two PING frames
+	 * @return a new {@link HttpClient}
+	 */
+	public final HttpClient h2HeartbeatTime(Duration heartbeatTime) {
+		Objects.requireNonNull(heartbeatTime, "heartbeatTime");
+		HttpClient dup = duplicate();
+		dup.configuration().h2HeartbeatTime = heartbeatTime;
+		return dup;
+	}
+
+	public final HttpClient h2HeartbeatTime(Supplier<Duration> heartbeatTime) {
+		Objects.requireNonNull(heartbeatTime, "heartbeatTime");
+		HttpClient dup = duplicate();
+		dup.configuration().h2HeartbeatTime = heartbeatTime.get();
+		return dup;
+	}
+
+	/**
+	 * The timeout for a PING frame to be acknowledged. If client does not receive an acknowledgment within this time,
+	 * it will considered PING request failed.
+	 *
+	 * @param heartbeatTimeout the timeout of a PING frame
+	 * @return @return a new {@link HttpClient}
+	 */
+	public final HttpClient h2HeartbeatTimeout(Duration heartbeatTimeout) {
+		Objects.requireNonNull(heartbeatTimeout, "heartbeatTimeout");
+		HttpClient dup = duplicate();
+		dup.configuration().h2HeartbeatTimeout = heartbeatTimeout;
+		return dup;
+	}
+
+	public final HttpClient h2HeartbeatTimeout(Supplier<Duration> heartbeatTimeout) {
+		Objects.requireNonNull(heartbeatTimeout, "heartbeatTimeout");
+		HttpClient dup = duplicate();
+		dup.configuration().h2HeartbeatTimeout = heartbeatTimeout.get();
+		return dup;
+	}
+
+	/**
+	 * The max times for PING frame not acknowledged,when more than this value clint will close the connection.
+	 *
+	 * @param maxFailedTimes the max time for PING failed before close connection
+	 * @return @return a new {@link HttpClient}
+	 */
+	public final HttpClient maxH2HeartbeatFailedTimes(int maxFailedTimes) {
+		if (maxFailedTimes <= 0) {
+			throw new IllegalArgumentException("max failed times must be big than zero");
+		}
+
+		HttpClient dup = duplicate();
+		dup.configuration().maxH2HeartbeatFailedTimes = maxFailedTimes;
+		return dup;
+	}
+
+	public final HttpClient maxH2HeartbeatFailedTimes(Supplier<Integer> maxFailedTimes) {
+		Objects.requireNonNull(maxFailedTimes, "maxFailedTimes");
+		if (maxFailedTimes.get() <= 0) {
+			throw new IllegalArgumentException("max failed times must be big than zero");
+		}
+
+		HttpClient dup = duplicate();
+		dup.configuration().maxH2HeartbeatFailedTimes = maxFailedTimes.get();
+		return dup;
+	}
+
 	@Override
 	public final HttpClient observe(ConnectionObserver observer) {
 		return super.observe(observer);
@@ -1647,7 +1750,8 @@ public abstract class HttpClient extends ClientTransport<HttpClient, HttpClientC
 	}
 
 	static boolean isCompressing(HttpHeaders h) {
-		return h.contains(HttpHeaderNames.ACCEPT_ENCODING, HttpHeaderValues.GZIP, true);
+		return h.contains(HttpHeaderNames.ACCEPT_ENCODING, HttpHeaderValues.GZIP, true)
+				|| h.contains(HttpHeaderNames.ACCEPT_ENCODING, HttpHeaderValues.BR, true);
 	}
 
 	static String reactorNettyVersion() {

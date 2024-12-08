@@ -21,8 +21,11 @@ import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import io.netty.buffer.ByteBuf;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelHandler;
+import io.netty.channel.ChannelHandlerContext;
+import io.netty.channel.ChannelInboundHandlerAdapter;
 import io.netty.handler.codec.http.HttpHeaderNames;
 import io.netty.handler.codec.http.HttpHeaderValues;
+import io.netty.handler.ssl.SniCompletionEvent;
 import io.netty.handler.ssl.util.InsecureTrustManagerFactory;
 import io.netty.handler.ssl.util.SelfSignedCertificate;
 import io.netty.incubator.codec.quic.InsecureQuicTokenHandler;
@@ -34,6 +37,7 @@ import org.junit.jupiter.api.Test;
 import org.reactivestreams.Publisher;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+import reactor.core.publisher.Signal;
 import reactor.core.scheduler.Schedulers;
 import reactor.netty.ByteBufFlux;
 import reactor.netty.DisposableServer;
@@ -45,11 +49,13 @@ import reactor.netty.http.server.HttpServer;
 import reactor.netty.http.server.HttpServerRequest;
 import reactor.netty.http.server.HttpServerResponse;
 import reactor.netty.http.server.logging.AccessLog;
+import reactor.netty.internal.shaded.reactor.pool.PoolAcquireTimeoutException;
 import reactor.netty.resources.ConnectionProvider;
 import reactor.test.StepVerifier;
 import reactor.util.annotation.Nullable;
 import reactor.util.function.Tuple2;
 
+import javax.net.ssl.SNIHostName;
 import java.net.InetSocketAddress;
 import java.net.SocketAddress;
 import java.security.cert.CertificateException;
@@ -58,6 +64,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BiFunction;
@@ -387,6 +394,145 @@ class Http3Tests {
 	}
 
 	@Test
+	void testHttp3ForMemoryLeaks() {
+		disposableServer =
+				createServer()
+				        .wiretap(false)
+				        .handle((req, res) ->
+				                res.sendString(Flux.range(0, 10)
+				                                   .map(i -> "test")
+				                                   .delayElements(Duration.ofMillis(4))))
+				        .bindNow();
+
+		HttpClient client = createClient(disposableServer.port()).wiretap(false);
+		for (int i = 0; i < 1000; ++i) {
+			try {
+				client.get()
+				      .uri("/")
+				      .responseContent()
+				      .aggregate()
+				      .asString()
+				      .timeout(Duration.ofMillis(ThreadLocalRandom.current().nextInt(1, 35)))
+				      .block(Duration.ofMillis(100));
+			}
+			catch (Throwable t) {
+				// ignore
+			}
+		}
+
+		System.gc();
+		for (int i = 0; i < 100000; ++i) {
+			@SuppressWarnings("UnusedVariable")
+			int[] arr = new int[100000];
+		}
+		System.gc();
+	}
+
+	@Test
+	void testMaxActiveStreamsCustomPool() throws Exception {
+		ConnectionProvider provider = ConnectionProvider.create("testMaxActiveStreamsCustomPool", 1);
+		try {
+			doTestMaxActiveStreams(provider, 2, 2, 0);
+		}
+		finally {
+			provider.disposeLater()
+			        .block(Duration.ofSeconds(5));
+		}
+	}
+
+	@Test
+	void testMaxActiveStreamsCustomPoolOneMaxActiveStream() throws Exception {
+		ConnectionProvider provider =
+				ConnectionProvider.builder("testMaxActiveStreamsCustomPoolOneMaxActiveStream")
+				                  .maxConnections(1)
+				                  .pendingAcquireTimeout(Duration.ofMillis(10))
+				                  .build();
+		try {
+			doTestMaxActiveStreams(provider, 1, 1, 1);
+		}
+		finally {
+			provider.disposeLater()
+			        .block(Duration.ofSeconds(5));
+		}
+	}
+
+	@Test
+	void testMaxActiveStreamsDefaultPool() throws Exception {
+		doTestMaxActiveStreams(2, 2, 0);
+	}
+
+	@Test
+	void testMaxActiveStreamsNoPool() throws Exception {
+		ConnectionProvider provider = ConnectionProvider.newConnection();
+		try {
+			doTestMaxActiveStreams(provider, 2, 2, 0);
+		}
+		finally {
+			provider.disposeLater()
+			        .block(Duration.ofSeconds(5));
+		}
+	}
+
+	void doTestMaxActiveStreams(int maxActiveStreams, int expectedOnNext, int expectedOnError) throws Exception {
+		doTestMaxActiveStreams(null, maxActiveStreams, expectedOnNext, expectedOnError);
+	}
+
+	void doTestMaxActiveStreams(@Nullable ConnectionProvider provider, int maxActiveStreams, int expectedOnNext, int expectedOnError) throws Exception {
+		disposableServer =
+				createServer()
+				        .route(routes ->
+				                routes.post("/echo", (req, res) -> res.send(req.receive()
+				                                                               .aggregate()
+				                                                               .retain()
+				                                                               .delayElement(Duration.ofMillis(100)))))
+				        .http3Settings(spec -> spec.idleTimeout(Duration.ofSeconds(5))
+				                                   .maxData(10000000)
+				                                   .maxStreamDataBidirectionalLocal(1000000)
+				                                   .maxStreamDataBidirectionalRemote(1000000)
+				                                   .maxStreamsBidirectional(maxActiveStreams)
+				                                   .tokenHandler(InsecureQuicTokenHandler.INSTANCE))
+				        .bindNow();
+
+		HttpClient client = createClient(provider, disposableServer.port());
+
+		CountDownLatch latch = new CountDownLatch(1);
+		List<? extends Signal<? extends String>> list =
+				Flux.range(0, 2)
+				    .flatMapDelayError(i ->
+				            client.post()
+				                  .uri("/echo")
+				                  .send(ByteBufFlux.fromString(Mono.just("doTestMaxActiveStreams")))
+				                  .responseContent()
+				                  .aggregate()
+				                  .asString()
+				                  .materialize(), 256, 32)
+				    .collectList()
+				    .doFinally(fin -> latch.countDown())
+				    .block(Duration.ofSeconds(5));
+
+		assertThat(latch.await(5, TimeUnit.SECONDS)).as("latch 5s").isTrue();
+
+		assertThat(list).isNotNull().hasSize(2);
+
+		int onNext = 0;
+		int onError = 0;
+		String msg = "Pool#acquire(Duration) has been pending for more than the configured timeout of 10ms";
+		for (int i = 0; i < 2; i++) {
+			Signal<? extends String> signal = list.get(i);
+			if (signal.isOnNext()) {
+				onNext++;
+			}
+			else if (signal.getThrowable() instanceof PoolAcquireTimeoutException &&
+					signal.getThrowable().getMessage().contains(msg)) {
+				onError++;
+			}
+		}
+
+		assertThat(onNext).isEqualTo(expectedOnNext);
+		assertThat(onError).isEqualTo(expectedOnError);
+	}
+
+	@Test
 	@Disabled
 	void testMetrics() throws Exception {
 		disposableServer =
@@ -491,6 +637,67 @@ class Http3Tests {
 		        .expectNext("Hello")
 		        .expectComplete()
 		        .verify(Duration.ofSeconds(5));
+	}
+
+	@Test
+	void testProtocolVersion() {
+		disposableServer =
+				createServer().handle((req, res) -> res.sendString(Mono.just(req.protocol())))
+				              .bindNow();
+
+		createClient(disposableServer.port())
+		        .get()
+		        .uri("/")
+		        .responseSingle((res, bytes) -> bytes.asString().zipWith(Mono.just(res.version().text())))
+		        .as(StepVerifier::create)
+		        .expectNextMatches(t -> t.getT1().equals(t.getT2()) && "HTTP/3.0".equals(t.getT1()))
+		        .expectComplete()
+		        .verify(Duration.ofSeconds(5));
+	}
+
+	@Test
+	void testSniSupport() throws Exception {
+		SelfSignedCertificate defaultCert = new SelfSignedCertificate("default");
+		SelfSignedCertificate testCert = new SelfSignedCertificate("test.com");
+
+		AtomicReference<String> hostname = new AtomicReference<>();
+
+		Http3SslContextSpec defaultSslContextBuilder = Http3SslContextSpec.forServer(defaultCert.key(), null, defaultCert.cert());
+		Http3SslContextSpec testSslContextBuilder = Http3SslContextSpec.forServer(testCert.key(), null, testCert.cert());
+
+		disposableServer =
+				createServer().port(8080)
+				              .secure(spec -> spec.sslContext(defaultSslContextBuilder)
+				                                  .addSniMapping("*.test.com", domainSpec -> domainSpec.sslContext(testSslContextBuilder)))
+				              .doOnChannelInit((obs, channel, remoteAddress) ->
+				                  channel.pipeline()
+				                         .addLast(new ChannelInboundHandlerAdapter() {
+				                               @Override
+				                               public void userEventTriggered(ChannelHandlerContext ctx, Object evt) {
+				                                 if (evt instanceof SniCompletionEvent) {
+				                                     hostname.set(((SniCompletionEvent) evt).hostname());
+				                                 }
+				                                 ctx.fireUserEventTriggered(evt);
+				                             }
+				                           }))
+				              .handle((req, res) -> res.sendString(Mono.just("testSniSupport")))
+				              .bindNow();
+
+		Http3SslContextSpec clientSslContextBuilder =
+				Http3SslContextSpec.forClient()
+				                   .configure(builder -> builder.trustManager(InsecureTrustManagerFactory.INSTANCE));
+
+		createClient(disposableServer.port())
+		         .secure(spec -> spec.sslContext(clientSslContextBuilder)
+		                             .serverNames(new SNIHostName("test.com")))
+		         .get()
+		         .uri("/")
+		         .responseContent()
+		         .aggregate()
+		         .block(Duration.ofSeconds(30));
+
+		assertThat(hostname.get()).isNotNull();
+		assertThat(hostname.get()).isEqualTo("test.com");
 	}
 
 	@Test
