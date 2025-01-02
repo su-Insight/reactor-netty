@@ -186,13 +186,13 @@ By default, the `HTTP` client is configured with the following settings:
 {http-source-link}/reactor/netty/http/HttpDecoderSpec.java
 [%unbreakable]
 ----
-include::{sourcedir}/reactor/netty/http/HttpDecoderSpec.java[lines=28..39]
+include::{sourcedir}/reactor/netty/http/HttpDecoderSpec.java[lines=28..40]
 ----
 
 {http-source-link}/reactor/netty/http/client/HttpResponseDecoderSpec.java
 [%unbreakable]
 ----
-include::{sourcedir}/reactor/netty/http/client/HttpResponseDecoderSpec.java[lines=44..52]
+include::{sourcedir}/reactor/netty/http/client/HttpResponseDecoderSpec.java[lines=42..50]
 ----
 
 When you need to change these default settings, you can configure the `HTTP` client as follows:
@@ -333,8 +333,22 @@ include::{examples-dir}/http2/H2CApplication.java[lines=18..41]
 {http-source-link}/reactor/netty/http/HttpProtocol.java
 [%unbreakable]
 ----
-include::{sourcedir}/reactor/netty/http/HttpProtocol.java[lines=24..58]
+include::{sourcedir}/reactor/netty/http/HttpProtocol.java[lines=26..61]
 ----
+
+[[HTTP3]]
+== HTTP/3
+By default, the `HTTP` client supports `HTTP/1.1`. If you need `HTTP/3`, you can get it through configuration.
+In addition to the protocol configuration, you need to add dependency to `io.netty.incubator:netty-incubator-codec-http3`.
+
+The following listing presents a simple `HTTP3` example:
+
+{examples-link}/http3/Application.java
+----
+include::{examples-dir}/http3/Application.java[lines=18..46]
+----
+<1> Configures the client to support only `HTTP/3`
+<2> Configures `HTTP/3` settings
 
 include::partial$proxy.adoc[]
 
@@ -446,7 +460,7 @@ include::{examples-dir}/tracing/Application.java[lines=18..90]
 
 The result in `Zipkin` looks like:
 
-image::http-client-tracing.png[]
+image::http-client-tracing.png[role="invert-dark"]
 
 [[access-current-observation]]
 === Access Current Observation
@@ -474,13 +488,14 @@ You may also need to configure the Reactor Netty `ObservationHandlers` using the
 
 [[unix-domain-sockets]]
 == Unix Domain Sockets
-The `HTTP` client supports Unix Domain Sockets (UDS) when native transport is in use.
+The `HTTP` client supports Unix Domain Sockets (UDS) when native transport is in use for all java versions
+and when NIO transport is in use for java 17 and above.
 
 The following example shows how to use UDS support:
 
 {examples-link}/uds/Application.java
 ----
-include::{examples-dir}/uds/Application.java[lines=18..33]
+include::{examples-dir}/uds/Application.java[lines=18..38]
 ----
 <1> Specifies `DomainSocketAddress` that will be used
 

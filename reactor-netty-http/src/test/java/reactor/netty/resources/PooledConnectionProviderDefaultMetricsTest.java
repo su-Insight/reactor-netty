@@ -19,6 +19,8 @@ import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Metrics;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+import io.netty.handler.codec.http.HttpHeaderNames;
+import io.netty.handler.codec.http.HttpHeaderValues;
 import io.netty.handler.ssl.util.InsecureTrustManagerFactory;
 import io.netty.handler.ssl.util.SelfSignedCertificate;
 import org.junit.jupiter.api.AfterEach;
@@ -30,10 +32,12 @@ import org.junit.jupiter.params.provider.ValueSource;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.netty.BaseHttpTest;
+import reactor.netty.channel.ChannelMetricsRecorder;
 import reactor.netty.http.Http2SslContextSpec;
 import reactor.netty.http.HttpProtocol;
 import reactor.netty.http.client.HttpClient;
 import reactor.netty.http.server.HttpServer;
+import reactor.test.StepVerifier;
 
 import java.security.cert.CertificateException;
 import java.time.Duration;
@@ -45,6 +49,8 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Function;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.awaitility.Awaitility.await;
+import static org.mockito.Mockito.mock;
 import static reactor.netty.Metrics.ACTIVE_CONNECTIONS;
 import static reactor.netty.Metrics.ACTIVE_STREAMS;
 import static reactor.netty.Metrics.ERROR;
@@ -55,6 +61,7 @@ import static reactor.netty.Metrics.PENDING_CONNECTIONS;
 import static reactor.netty.Metrics.MAX_PENDING_CONNECTIONS;
 import static reactor.netty.Metrics.NAME;
 import static reactor.netty.Metrics.PENDING_STREAMS;
+import static reactor.netty.Metrics.REGISTRY;
 import static reactor.netty.Metrics.STATUS;
 import static reactor.netty.Metrics.TOTAL_CONNECTIONS;
 import static reactor.netty.http.client.HttpClientState.STREAM_CONFIGURED;
@@ -241,26 +248,26 @@ class PooledConnectionProviderDefaultMetricsTest extends BaseHttpTest {
 		Http2SslContextSpec serverCtx = Http2SslContextSpec.forServer(ssc.certificate(), ssc.privateKey());
 		Http2SslContextSpec clientCtx =
 				Http2SslContextSpec.forClient()
-						.configure(builder -> builder.trustManager(InsecureTrustManagerFactory.INSTANCE));
+				                   .configure(builder -> builder.trustManager(InsecureTrustManagerFactory.INSTANCE));
 
 		disposableServer =
 				HttpServer.create()
-						.port(0)
-						.protocol(HttpProtocol.H2)
-						.secure(spec -> spec.sslContext(serverCtx))
-						.handle((req, res) ->
-								res.sendString(Flux.range(0, 10)
-										.map(i -> "test")
-										.delayElements(Duration.ofMillis(4))))
-						.bindNow();
+				          .port(0)
+				          .protocol(HttpProtocol.H2)
+				          .secure(spec -> spec.sslContext(serverCtx))
+				          .handle((req, res) ->
+				              res.sendString(Flux.range(0, 10)
+				                                 .map(i -> "test")
+				                                 .delayElements(Duration.ofMillis(4))))
+				          .bindNow();
 
-		ConnectionProvider.Builder builder = ConnectionProvider
-				.builder("testConnectionPoolPendingAcquireSize")
-				.pendingAcquireMaxCount(1000)
-				.maxConnections(500)
-				.metrics(true);
-		ConnectionProvider provider = disposeTimeoutMillis == 0 ? builder.build() :
-				builder.disposeTimeout(Duration.ofMillis(disposeTimeoutMillis)).build();
+		ConnectionProvider.Builder builder =
+				ConnectionProvider.builder("testConnectionPoolPendingAcquireSize")
+				                  .pendingAcquireMaxCount(1000)
+				                  .maxConnections(500)
+				                  .metrics(true);
+		ConnectionProvider provider = disposeTimeoutMillis == 0 ?
+				builder.build() : builder.disposeTimeout(Duration.ofMillis(disposeTimeoutMillis)).build();
 
 		CountDownLatch meterRemoved = new CountDownLatch(1);
 		String name = CONNECTION_PROVIDER_PREFIX + PENDING_STREAMS;
@@ -274,45 +281,50 @@ class PooledConnectionProviderDefaultMetricsTest extends BaseHttpTest {
 			AtomicInteger counter = new AtomicInteger();
 			HttpClient client =
 					HttpClient.create(provider)
-							.port(disposableServer.port())
-							.protocol(HttpProtocol.H2)
-							.secure(spec -> spec.sslContext(clientCtx))
-							.observe((conn, state) -> {
-								if (state == STREAM_CONFIGURED) {
-									counter.incrementAndGet();
-									conn.onTerminate()
-									    .subscribe(null,
-									        t -> conn.channel().eventLoop().execute(() -> {
-									                if (counter.decrementAndGet() == 0) {
-									                    latch.countDown();
-									                }
-									        }),
-									        () -> conn.channel().eventLoop().execute(() -> {
-									                if (counter.decrementAndGet() == 0) {
-									                    latch.countDown();
-									                }
-									        }));
-								}
-							});
+					          .port(disposableServer.port())
+					          .protocol(HttpProtocol.H2)
+					          .secure(spec -> spec.sslContext(clientCtx))
+					          .observe((conn, state) -> {
+					              if (state == STREAM_CONFIGURED) {
+					                  counter.incrementAndGet();
+					                  conn.onTerminate()
+					                      .subscribe(null,
+					                          t -> conn.channel().eventLoop().execute(() -> {
+					                              if (counter.decrementAndGet() == 0) {
+					                                  latch.countDown();
+					                              }
+					                          }),
+					                          () -> conn.channel().eventLoop().execute(() -> {
+					                              if (counter.decrementAndGet() == 0) {
+					                                  latch.countDown();
+					                              }
+					                          }));
+					              }
+					          });
 
 
 			Flux.range(0, 1000)
-					.flatMap(i ->
-							client.get()
-									.uri("/")
-									.responseContent()
-									.aggregate()
-									.asString()
-									.timeout(Duration.ofMillis(ThreadLocalRandom.current().nextInt(1, 35)), Mono.just("timeout")))
-					.blockLast(Duration.ofSeconds(30));
+			    .flatMap(i ->
+			        client.get()
+			              .uri("/")
+			              .responseContent()
+			              .aggregate()
+			              .asString()
+			              .timeout(Duration.ofMillis(ThreadLocalRandom.current().nextInt(1, 35)), Mono.just("timeout")))
+			    .blockLast(Duration.ofSeconds(30));
 
 			assertThat(latch.await(30, TimeUnit.SECONDS)).isTrue();
+
+			await().atMost(1000, TimeUnit.MILLISECONDS)
+			       .with()
+			       .pollInterval(50, TimeUnit.MILLISECONDS)
+			       .untilAsserted(() -> assertGauge(registry, name, NAME, "http2.testConnectionPoolPendingAcquireSize").hasValueEqualTo(0));
 
 			assertGauge(registry, name, NAME, "http2.testConnectionPoolPendingAcquireSize").hasValueEqualTo(0);
 		}
 		finally {
 			provider.disposeLater()
-					.block(Duration.ofSeconds(30));
+			        .block(Duration.ofSeconds(30));
 		}
 
 		assertThat(meterRemoved.await(30, TimeUnit.SECONDS)).isTrue();
@@ -366,6 +378,52 @@ class PooledConnectionProviderDefaultMetricsTest extends BaseHttpTest {
 
 			assertThat(latch.await(30, TimeUnit.SECONDS)).as("latch await").isTrue();
 			assertTimer(registry, PENDING_CONNECTIONS_TIME.getName(), NAME, "testIssue3060", STATUS, ERROR).hasCountEqualTo(1);
+		}
+		finally {
+			provider.disposeLater()
+			        .block(Duration.ofSeconds(5));
+		}
+	}
+
+	/* https://github.com/reactor/reactor-netty/issues/3519 */
+	@Test
+	public void testConnectionProviderDisableAllBuiltInMetrics() throws Exception {
+		disposableServer =
+				createServer()
+				        .handle((req, res) -> res.sendString(Mono.just("testConnectionProviderDisableAllBuiltInMetrics")))
+				        .bindNow();
+
+		ConnectionProvider provider =
+				ConnectionProvider.builder("testConnectionProviderDisableAllBuiltInMetrics")
+				                  .metrics(true, () -> mock(ConnectionProvider.MeterRegistrar.class))
+				                  .build();
+
+		try {
+			CountDownLatch latch = new CountDownLatch(1);
+			createClient(provider, disposableServer.port())
+			        .metrics(true, () -> mock(ChannelMetricsRecorder.class))
+			        .headers(h -> h.set(HttpHeaderNames.CONNECTION, HttpHeaderValues.CLOSE))
+			        .doOnRequest((req, conn) -> conn.channel().closeFuture().addListener(f -> latch.countDown()))
+			        .get()
+			        .uri("/")
+			        .responseContent()
+			        .aggregate()
+			        .asString()
+			        .as(StepVerifier::create)
+			        .expectNext("testConnectionProviderDisableAllBuiltInMetrics")
+			        .expectComplete()
+			        .verify(Duration.ofSeconds(5));
+
+			assertThat(latch.await(5, TimeUnit.SECONDS)).as("latch await").isTrue();
+
+			AtomicInteger count = new AtomicInteger();
+			REGISTRY.forEachMeter(meter -> {
+				if (meter.getId().getName().startsWith("reactor.netty.connection")) {
+					count.incrementAndGet();
+				}
+			});
+
+			assertThat(count).hasValue(0);
 		}
 		finally {
 			provider.disposeLater()

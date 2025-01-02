@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011-2023 VMware, Inc. or its affiliates, All Rights Reserved.
+ * Copyright (c) 2011-2024 VMware, Inc. or its affiliates, All Rights Reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -25,9 +25,17 @@ import java.util.function.Predicate;
 
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.ByteBufAllocator;
+import io.netty.channel.AbstractChannel;
 import io.netty.channel.Channel;
+import io.netty.channel.ChannelConfig;
+import io.netty.channel.ChannelFuture;
 import io.netty.channel.ChannelHandler;
 import io.netty.channel.ChannelHandlerContext;
+import io.netty.channel.ChannelMetadata;
+import io.netty.channel.ChannelOutboundBuffer;
+import io.netty.channel.ChannelPromise;
+import io.netty.channel.DefaultChannelConfig;
+import io.netty.channel.EventLoop;
 import io.netty.util.ReferenceCounted;
 import org.reactivestreams.Publisher;
 import org.reactivestreams.Subscription;
@@ -123,16 +131,16 @@ public class ChannelOperations<INBOUND extends NettyInbound, OUTBOUND extends Ne
 		                 .as(ChannelOperations.class);
 	}
 
-	final Connection          connection;
+	Connection                connection;
 	final FluxReceive         inbound;
-	final ConnectionObserver  listener;
+	ConnectionObserver        listener;
 	final Sinks.Empty<Void>   onTerminate;
-	final String              shortId;
 
 	volatile Subscription outboundSubscription;
 
 	boolean localActive;
 	String longId;
+	String shortId;
 
 	protected ChannelOperations(ChannelOperations<INBOUND, OUTBOUND> replaced) {
 		this.connection = replaced.connection;
@@ -155,7 +163,6 @@ public class ChannelOperations<INBOUND extends NettyInbound, OUTBOUND extends Ne
 		this.listener = requireNonNull(listener, "listener");
 		this.onTerminate = Sinks.unsafe().empty();
 		this.inbound = new FluxReceive(this);
-		shortId = initShortId();
 	}
 
 	@Nullable
@@ -207,7 +214,9 @@ public class ChannelOperations<INBOUND extends NettyInbound, OUTBOUND extends Ne
 		if (!inbound.isDisposed()) {
 			discard();
 		}
-		connection.dispose();
+		if (!connection.isDisposed()) {
+			connection.dispose();
+		}
 	}
 
 	@Override
@@ -503,6 +512,8 @@ public class ChannelOperations<INBOUND extends NettyInbound, OUTBOUND extends Ne
 			// and it is guarded by rebind(connection), so tryEmitEmpty() should happen just once
 			onTerminate.tryEmitEmpty();
 			listener.onStateChange(this, ConnectionObserver.State.DISCONNECTING);
+			connection = new DisposedConnection(channel());
+			listener = ConnectionObserver.emptyListener();
 		}
 	}
 
@@ -594,6 +605,11 @@ public class ChannelOperations<INBOUND extends NettyInbound, OUTBOUND extends Ne
 
 	@Override
 	public String asShortText() {
+		String shortId = this.shortId;
+		if (shortId == null) {
+			this.shortId = shortId = initShortId();
+		}
+
 		return shortId;
 	}
 
@@ -678,4 +694,111 @@ public class ChannelOperations<INBOUND extends NettyInbound, OUTBOUND extends Ne
 			Subscription.class,
 			"outboundSubscription");
 
+	static final class DisposedChannel extends AbstractChannel {
+
+		final DefaultChannelConfig config;
+		final SocketAddress localAddress;
+		final ChannelMetadata metadata;
+		final SocketAddress remoteAddress;
+
+		DisposedChannel(Channel actual) {
+			super(null);
+			this.metadata = actual.metadata();
+			this.config = new DefaultChannelConfig(this);
+			this.localAddress = actual.localAddress();
+			this.remoteAddress = actual.remoteAddress();
+		}
+
+		@Override
+		public ChannelFuture closeFuture() {
+			return newSucceededFuture();
+		}
+
+		@Override
+		public ChannelConfig config() {
+			return config;
+		}
+
+		@Override
+		protected void doBeginRead() {
+			throw new UnsupportedOperationException();
+		}
+
+		@Override
+		protected void doBind(SocketAddress socketAddress) {
+			throw new UnsupportedOperationException();
+		}
+
+		@Override
+		protected void doClose() {
+			throw new UnsupportedOperationException();
+		}
+
+		@Override
+		protected void doDisconnect() {
+			throw new UnsupportedOperationException();
+		}
+
+		@Override
+		protected void doWrite(ChannelOutboundBuffer channelOutboundBuffer) {
+			throw new UnsupportedOperationException();
+		}
+
+		@Override
+		public boolean isActive() {
+			return false;
+		}
+
+		@Override
+		protected boolean isCompatible(EventLoop eventLoop) {
+			return false;
+		}
+
+		@Override
+		public boolean isOpen() {
+			return false;
+		}
+
+		@Override
+		protected SocketAddress localAddress0() {
+			return localAddress;
+		}
+
+		@Override
+		public ChannelMetadata metadata() {
+			return metadata;
+		}
+
+		@Override
+		protected AbstractUnsafe newUnsafe() {
+			return new DisposedChannelUnsafe();
+		}
+
+		@Override
+		protected SocketAddress remoteAddress0() {
+			return remoteAddress;
+		}
+
+		final class DisposedChannelUnsafe extends AbstractUnsafe {
+
+			@Override
+			public void connect(SocketAddress remoteAddress, SocketAddress localAddress, ChannelPromise promise) {
+				promise.setFailure(new UnsupportedOperationException());
+			}
+		}
+	}
+
+	static final class DisposedConnection implements Connection {
+
+		final Channel channel;
+
+		DisposedConnection(Channel actual) {
+			this.channel = new DisposedChannel(actual);
+		}
+
+		@Override
+		public Channel channel() {
+			return channel;
+		}
+	}
 }

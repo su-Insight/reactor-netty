@@ -16,6 +16,7 @@
 package reactor.netty.http.client;
 
 import java.io.IOException;
+import java.lang.ref.WeakReference;
 import java.lang.reflect.Field;
 import java.net.InetSocketAddress;
 import java.net.SocketAddress;
@@ -69,6 +70,7 @@ import io.netty.channel.group.ChannelGroup;
 import io.netty.channel.group.DefaultChannelGroup;
 import io.netty.channel.nio.NioEventLoopGroup;
 import io.netty.channel.unix.DomainSocketAddress;
+import io.netty.handler.codec.compression.Brotli;
 import io.netty.handler.codec.http.DefaultFullHttpResponse;
 import io.netty.handler.codec.http.HttpClientCodec;
 import io.netty.handler.codec.http.HttpContentDecompressor;
@@ -97,6 +99,7 @@ import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.MethodSource;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.reactivestreams.Publisher;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -106,6 +109,7 @@ import reactor.netty.ByteBufFlux;
 import reactor.netty.ByteBufMono;
 import reactor.netty.CancelReceiverHandlerTest;
 import reactor.netty.Connection;
+import reactor.netty.ConnectionObserver;
 import reactor.netty.FutureMono;
 import reactor.netty.LogTracker;
 import reactor.netty.NettyPipeline;
@@ -132,8 +136,12 @@ import reactor.util.context.Context;
 import reactor.util.function.Tuple2;
 import reactor.util.function.Tuples;
 
+import static io.netty.handler.codec.http.HttpHeaderNames.ACCEPT_ENCODING;
+import static io.netty.handler.codec.http.HttpHeaderValues.BR;
+import static io.netty.handler.codec.http.HttpHeaderValues.GZIP;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatExceptionOfType;
+import static org.assertj.core.api.Assumptions.assumeThat;
 
 /**
  * This test class verifies {@link HttpClient}.
@@ -474,6 +482,38 @@ class HttpClientTest extends BaseHttpTest {
 	}
 
 	@Test
+	void brotliEnabled() {
+		doTestBrotli(true);
+	}
+
+	@Test
+	void brotliDisabled() {
+		doTestBrotli(false);
+	}
+
+	private void doTestBrotli(boolean brotliEnabled) {
+		assumeThat(Brotli.isAvailable()).isTrue();
+
+		disposableServer =
+				createServer()
+				        .compress(true)
+				        .handle((req, res) -> res.sendString(Mono.just(req.requestHeaders().get(ACCEPT_ENCODING, "no brotli"))))
+				        .bindNow();
+
+		String expectedResponse = brotliEnabled ? "br" : "no brotli";
+		createHttpClientForContextWithPort()
+		        .compress(brotliEnabled)
+		        .headersWhen(h -> brotliEnabled ? Mono.just(h.set(ACCEPT_ENCODING, BR)) : Mono.just(h))
+		        .get()
+		        .uri("/")
+		        .responseSingle((r, buf) -> buf.asString().zipWith(Mono.just(r.status().code())))
+		        .as(StepVerifier::create)
+		        .expectNextMatches(tuple -> expectedResponse.equals(tuple.getT1()) && (tuple.getT2() == 200))
+		        .expectComplete()
+		        .verify(Duration.ofSeconds(5));
+	}
+
+	@Test
 	void gzipEnabled() {
 		doTestGzip(true);
 	}
@@ -484,18 +524,16 @@ class HttpClientTest extends BaseHttpTest {
 	}
 
 	private void doTestGzip(boolean gzipEnabled) {
-		String expectedResponse = gzipEnabled ? "gzip" : "no gzip";
 		disposableServer =
 				createServer()
-				          .handle((req, res) -> res.sendString(Mono.just(req.requestHeaders()
-				                                                           .get(HttpHeaderNames.ACCEPT_ENCODING,
-				                                                                "no gzip"))))
+				          .handle((req, res) -> res.sendString(Mono.just(req.requestHeaders().get(ACCEPT_ENCODING, "no gzip"))))
 				          .bindNow();
-		HttpClient client = createHttpClientForContextWithPort();
 
-		if (gzipEnabled) {
-			client = client.compress(true);
-		}
+		String expectedResponse = gzipEnabled ? "gzip" : "no gzip";
+		HttpClient client =
+				createHttpClientForContextWithPort()
+				        .compress(gzipEnabled)
+				        .headersWhen(h -> gzipEnabled ? Mono.just(h.set(ACCEPT_ENCODING, GZIP)) : Mono.just(h));
 
 		StepVerifier.create(client.get()
 		                          .uri("/")
@@ -1704,6 +1742,7 @@ class HttpClientTest extends BaseHttpTest {
 		AtomicBoolean validate = new AtomicBoolean();
 		AtomicInteger chunkSize = new AtomicInteger();
 		AtomicBoolean allowDuplicateContentLengths = new AtomicBoolean();
+		AtomicBoolean allowPartialChunks = new AtomicBoolean(true);
 		disposableServer =
 				createServer()
 				          .handle((req, resp) -> req.receive()
@@ -1718,7 +1757,8 @@ class HttpClientTest extends BaseHttpTest {
 		                                       .initialBufferSize(10)
 		                                       .failOnMissingResponse(true)
 		                                       .parseHttpAfterConnectRequest(true)
-		                                       .allowDuplicateContentLengths(true))
+		                                       .allowDuplicateContentLengths(true)
+		                                       .allowPartialChunks(false))
 		        .doOnConnected(c -> {
 		                    channelRef.set(c.channel());
 		                    HttpClientCodec codec = c.channel()
@@ -1728,6 +1768,7 @@ class HttpClientTest extends BaseHttpTest {
 		                    chunkSize.set((Integer) getValueReflection(decoder, "maxChunkSize", 2));
 		                    validate.set((Boolean) getValueReflection(decoder, "validateHeaders", 2));
 		                    allowDuplicateContentLengths.set((Boolean) getValueReflection(decoder, "allowDuplicateContentLengths", 2));
+		                    allowPartialChunks.set((Boolean) getValueReflection(decoder, "allowPartialChunks", 2));
 		                })
 		        .post()
 		        .uri("/")
@@ -1741,6 +1782,7 @@ class HttpClientTest extends BaseHttpTest {
 		assertThat(chunkSize).as("line length").hasValue(789);
 		assertThat(validate).as("validate headers").isFalse();
 		assertThat(allowDuplicateContentLengths).as("allow duplicate Content-Length").isTrue();
+		assertThat(allowPartialChunks).as("allow partial chunks").isFalse();
 	}
 
 	private Object getValueReflection(Object obj, String fieldName, int superLevel) {
@@ -3144,7 +3186,7 @@ class HttpClientTest extends BaseHttpTest {
 				      .responseContent()
 				      .aggregate()
 				      .asString()
-				      .block(Duration.ofSeconds(5));
+				      .block(Duration.ofSeconds(10));
 
 		assertThat(response).isEqualTo("testIssue1697");
 		assertThat(onRequest.get()).isFalse();
@@ -3180,7 +3222,7 @@ class HttpClientTest extends BaseHttpTest {
 	@Test
 	void testHttpClientCancelled() throws InterruptedException {
 		// logged by the server when last http packet is sent and channel is terminated
-		String serverCancelledLog = "[HttpServer] Channel inbound receiver cancelled (operation cancelled).";
+		String serverCancelledLog = "[HttpServer] Channel inbound receiver cancelled (subscription disposed).";
 		// logged by client when cancelled while receiving response
 		String clientCancelledLog = HttpClientOperations.INBOUND_CANCEL_LOG;
 
@@ -3345,5 +3387,130 @@ class HttpClientTest extends BaseHttpTest {
 			serverLoop.disposeLater()
 			          .block(Duration.ofSeconds(5));
 		}
+	}
+
+	@Test
+	void testIssue3285NoOperations() throws Exception {
+		testIssue3285("HTTP/1.1 200 OK\r\nContent-Length:4\r\n\r\ntest\r\n\r\nsomething\r\n\r\n", null);
+	}
+
+	@Test
+	void testIssue3285LastContent() throws Exception {
+		testIssue3285("HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\ntest\r\n\r\n", NumberFormatException.class);
+	}
+
+	@Test
+	void testIssue3285HttpResponse() throws Exception {
+		testIssue3285("HTTP/1 200 OK\r\n\r\n", IllegalArgumentException.class);
+	}
+
+	void testIssue3285(String serverResponse, @Nullable Class<? extends Throwable> expectedException) throws Exception {
+		disposableServer =
+				TcpServer.create()
+				         .host("localhost")
+				         .port(0)
+				         .wiretap(true)
+				         .handle((in, out) -> in.receive().flatMap(b -> out.sendString(Mono.just(serverResponse))))
+				         .bindNow();
+
+		CountDownLatch latch = new CountDownLatch(2);
+		ConnectionProvider provider = ConnectionProvider.create("testIssue3285", 1);
+		HttpClient client = createHttpClientForContextWithAddress(provider)
+				.doOnRequest((req, conn) -> conn.channel().closeFuture().addListener(f -> latch.countDown()));
+
+		try (LogTracker logTracker = new LogTracker("reactor.netty.channel.ChannelOperationsHandler", 2, "Decoding failed.")) {
+			testIssue3285SendRequest(client, expectedException);
+
+			testIssue3285SendRequest(client, expectedException);
+
+			assertThat(latch.await(5, TimeUnit.SECONDS)).isTrue();
+
+			if (expectedException == null) {
+				assertThat(logTracker.latch.await(5, TimeUnit.SECONDS)).isTrue();
+			}
+		}
+	}
+
+	static void testIssue3285SendRequest(HttpClient client, @Nullable Class<? extends Throwable> exception) {
+		Mono<String> response =
+				client.get()
+				      .uri("/")
+				      .responseSingle((res, bytes) -> bytes.asString());
+		if (exception != null) {
+			response.as(StepVerifier::create)
+			        .expectError(exception)
+			        .verify(Duration.ofSeconds(5));
+		}
+		else {
+			response.as(StepVerifier::create)
+			        .expectNext("test")
+			        .expectComplete()
+			        .verify(Duration.ofSeconds(5));
+		}
+	}
+
+	@Test
+	void testIssue3416() {
+		disposableServer =
+				createServer()
+				        .route(r -> r.get("/", (req, res) -> res.sendString(Mono.just("testIssue3416")))
+				                     .ws("/ws", (in, out) -> out.neverComplete()))
+				        .bindNow();
+
+		AtomicReference<WeakReference<Connection>> connWeakRef = new AtomicReference<>();
+		HttpClient client =
+				createClient(disposableServer.port())
+				        .observe((conn, state) -> {
+				            if (state == ConnectionObserver.State.CONNECTED) {
+				                connWeakRef.compareAndSet(null, new WeakReference<>(conn));
+				            }
+				        });
+
+		client.get()
+		      .uri("/")
+		      .response() // Reactor Netty will close the connection
+		      .flatMap(res -> // Keep response object alive and at the same time check that the real connection can be GCed
+		          client.websocket()
+		                .uri("/ws")
+		                .handle((in, out) ->
+		                    Flux.range(0, 10)
+		                        .delayElements(Duration.ofMillis(100))
+		                        .skipUntil(l -> {
+		                            boolean result = connWeakRef.get().get() == null;
+		                            if (!result) {
+		                                System.gc();
+		                            }
+		                            return result;
+		                        })
+		                        .switchIfEmpty(Mono.error(new RuntimeException("failed"))
+		                        .flatMap(l -> Mono.empty())))
+		                .then()
+		                .contextWrite(Context.of(res.getClass(), res)))
+		      .as(StepVerifier::create)
+		      .expectComplete()
+		      .verify(Duration.ofSeconds(5));
+	}
+
+	@ParameterizedTest
+	@ValueSource(booleans = {true, false})
+	void testDeleteMethod(boolean chunked) {
+		disposableServer =
+				createServer()
+				        .handle((req, res) -> res.send(req.receive().retain()))
+				        .bindNow();
+
+		Publisher<ByteBuf> body = chunked ?
+				ByteBufFlux.fromString(Flux.just("d", "e", "l", "e", "t", "e")) :
+				ByteBufMono.fromString(Mono.just("delete"));
+
+		createClient(disposableServer.port())
+		        .delete()
+		        .uri("/")
+		        .send(body)
+		        .responseSingle((res, bytes) -> bytes.asString())
+		        .as(StepVerifier::create)
+		        .expectNext("delete")
+		        .expectComplete()
+		        .verify(Duration.ofSeconds(5));
 	}
 }

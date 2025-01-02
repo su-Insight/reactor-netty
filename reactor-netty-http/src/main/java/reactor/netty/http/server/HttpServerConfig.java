@@ -48,6 +48,7 @@ import io.netty.handler.codec.http2.Http2Stream;
 import io.netty.handler.codec.http2.Http2StreamFrameToHttpObjectCodec;
 import io.netty.handler.logging.LogLevel;
 import io.netty.handler.logging.LoggingHandler;
+import io.netty.handler.ssl.AbstractSniHandler;
 import io.netty.handler.ssl.ApplicationProtocolNames;
 import io.netty.handler.ssl.ApplicationProtocolNegotiationHandler;
 import io.netty.handler.timeout.ReadTimeoutHandler;
@@ -172,6 +173,7 @@ public final class HttpServerConfig extends ServerTransportConfig<HttpServerConf
 	 * @since 1.2.0
 	 */
 	@Incubating
+	@Nullable
 	public Http3SettingsSpec http3SettingsSpec() {
 		return http3Settings;
 	}
@@ -718,7 +720,8 @@ public final class HttpServerConfig extends ServerTransportConfig<HttpServerConf
 		             .setMaxChunkSize(decoder.maxChunkSize())
 		             .setValidateHeaders(decoder.validateHeaders())
 		             .setInitialBufferSize(decoder.initialBufferSize())
-		             .setAllowDuplicateContentLengths(decoder.allowDuplicateContentLengths());
+		             .setAllowDuplicateContentLengths(decoder.allowDuplicateContentLengths())
+		             .setAllowPartialChunks(decoder.allowPartialChunks());
 		HttpServerCodec httpServerCodec =
 				new HttpServerCodec(decoderConfig);
 
@@ -742,7 +745,7 @@ public final class HttpServerConfig extends ServerTransportConfig<HttpServerConf
 		            NettyPipeline.HttpTrafficHandler,
 		            new HttpTrafficHandler(compressPredicate, cookieDecoder, cookieEncoder, formDecoderProvider,
 		                    forwardedHeaderHandler, httpMessageLogFactory, idleTimeout, listener, mapHandle, maxKeepAliveRequests,
-		                    readTimeout, requestTimeout));
+		                    readTimeout, requestTimeout, decoder.validateHeaders()));
 
 		if (accessLogEnabled) {
 			p.addAfter(NettyPipeline.HttpTrafficHandler, NettyPipeline.AccessLogHandler, AccessLogHandlerFactory.H1.create(accessLog));
@@ -804,7 +807,8 @@ public final class HttpServerConfig extends ServerTransportConfig<HttpServerConf
 		             .setMaxChunkSize(decoder.maxChunkSize())
 		             .setValidateHeaders(decoder.validateHeaders())
 		             .setInitialBufferSize(decoder.initialBufferSize())
-		             .setAllowDuplicateContentLengths(decoder.allowDuplicateContentLengths());
+		             .setAllowDuplicateContentLengths(decoder.allowDuplicateContentLengths())
+		             .setAllowPartialChunks(decoder.allowPartialChunks());
 		p.addBefore(NettyPipeline.ReactiveBridge,
 		            NettyPipeline.HttpCodec,
 		            new HttpServerCodec(decoderConfig))
@@ -812,7 +816,7 @@ public final class HttpServerConfig extends ServerTransportConfig<HttpServerConf
 		            NettyPipeline.HttpTrafficHandler,
 		            new HttpTrafficHandler(compressPredicate, cookieDecoder, cookieEncoder, formDecoderProvider,
 		                    forwardedHeaderHandler, httpMessageLogFactory, idleTimeout, listener, mapHandle, maxKeepAliveRequests,
-		                    readTimeout, requestTimeout));
+		                    readTimeout, requestTimeout, decoder.validateHeaders()));
 
 		if (accessLogEnabled) {
 			p.addAfter(NettyPipeline.HttpTrafficHandler, NettyPipeline.AccessLogHandler, AccessLogHandlerFactory.H1.create(accessLog));
@@ -1212,9 +1216,14 @@ public final class HttpServerConfig extends ServerTransportConfig<HttpServerConf
 		final ChannelOperations.OnSetup                               opsFactory;
 		final Duration                                                readTimeout;
 		final Duration                                                requestTimeout;
+		final boolean                                                 supportOnlyHttp2;
 		final Function<String, String>                                uriTagValue;
 
 		H2OrHttp11Codec(HttpServerChannelInitializer initializer, ConnectionObserver listener) {
+			this(initializer, listener, false);
+		}
+
+		H2OrHttp11Codec(HttpServerChannelInitializer initializer, ConnectionObserver listener, boolean supportOnlyHttp2) {
 			super(ApplicationProtocolNames.HTTP_1_1);
 			this.accessLogEnabled = initializer.accessLogEnabled;
 			this.accessLog = initializer.accessLog;
@@ -1237,6 +1246,7 @@ public final class HttpServerConfig extends ServerTransportConfig<HttpServerConf
 			this.opsFactory = initializer.opsFactory;
 			this.readTimeout = initializer.readTimeout;
 			this.requestTimeout = initializer.requestTimeout;
+			this.supportOnlyHttp2 = supportOnlyHttp2;
 			this.uriTagValue = initializer.uriTagValue;
 		}
 
@@ -1256,7 +1266,7 @@ public final class HttpServerConfig extends ServerTransportConfig<HttpServerConf
 				return;
 			}
 
-			if (ApplicationProtocolNames.HTTP_1_1.equals(protocol)) {
+			if (!supportOnlyHttp2 && ApplicationProtocolNames.HTTP_1_1.equals(protocol)) {
 				configureHttp11Pipeline(p, accessLogEnabled, accessLog, compressPredicate, cookieDecoder, cookieEncoder, true,
 						decoder, formDecoderProvider, forwardedHeaderHandler, httpMessageLogFactory, idleTimeout, listener,
 						mapHandle, maxKeepAliveRequests, methodTagValue, metricsRecorder, minCompressionSize, readTimeout, requestTimeout, uriTagValue);
@@ -1284,7 +1294,6 @@ public final class HttpServerConfig extends ServerTransportConfig<HttpServerConf
 		final HttpServerFormDecoderProvider                           formDecoderProvider;
 		final BiFunction<ConnectionInfo, HttpRequest, ConnectionInfo> forwardedHeaderHandler;
 		final Http2SettingsSpec                                       http2SettingsSpec;
-		final Http3SettingsSpec                                       http3SettingsSpec;
 		final HttpMessageLogFactory                                   httpMessageLogFactory;
 		final Duration                                                idleTimeout;
 		final BiFunction<? super Mono<Void>, ? super Connection, ? extends Mono<Void>>
@@ -1313,7 +1322,6 @@ public final class HttpServerConfig extends ServerTransportConfig<HttpServerConf
 			this.formDecoderProvider = config.formDecoderProvider;
 			this.forwardedHeaderHandler = config.forwardedHeaderHandler;
 			this.http2SettingsSpec = config.http2Settings;
-			this.http3SettingsSpec = config.http3Settings;
 			this.httpMessageLogFactory = config.httpMessageLogFactory;
 			this.idleTimeout = config.idleTimeout;
 			this.mapHandle = config.mapHandle;
@@ -1380,29 +1388,38 @@ public final class HttpServerConfig extends ServerTransportConfig<HttpServerConf
 							uriTagValue);
 				}
 				else if ((protocols & h2) == h2) {
-					configureH2Pipeline(
-							channel.pipeline(),
-							accessLogEnabled,
-							accessLog,
-							compressPredicate(compressPredicate, minCompressionSize),
-							cookieDecoder,
-							cookieEncoder,
-							enableGracefulShutdown,
-							formDecoderProvider,
-							forwardedHeaderHandler,
-							http2SettingsSpec,
-							httpMessageLogFactory,
-							idleTimeout,
-							observer,
-							mapHandle,
-							methodTagValue,
-							metricsRecorder,
-							minCompressionSize,
-							opsFactory,
-							readTimeout,
-							requestTimeout,
-							uriTagValue,
-							decoder.validateHeaders());
+					ChannelHandler sslHandler = channel.pipeline().get(NettyPipeline.SslHandler);
+					if (sslHandler instanceof AbstractSniHandler) {
+						channel.pipeline()
+						       .addBefore(NettyPipeline.ReactiveBridge,
+						                  NettyPipeline.H2OrHttp11Codec,
+						                  new H2OrHttp11Codec(this, observer, true));
+					}
+					else {
+						configureH2Pipeline(
+								channel.pipeline(),
+								accessLogEnabled,
+								accessLog,
+								compressPredicate(compressPredicate, minCompressionSize),
+								cookieDecoder,
+								cookieEncoder,
+								enableGracefulShutdown,
+								formDecoderProvider,
+								forwardedHeaderHandler,
+								http2SettingsSpec,
+								httpMessageLogFactory,
+								idleTimeout,
+								observer,
+								mapHandle,
+								methodTagValue,
+								metricsRecorder,
+								minCompressionSize,
+								opsFactory,
+								readTimeout,
+								requestTimeout,
+								uriTagValue,
+								decoder.validateHeaders());
+					}
 				}
 				else if ((protocols & h3) == h3) {
 					configureHttp3Pipeline(
@@ -1601,7 +1618,7 @@ public final class HttpServerConfig extends ServerTransportConfig<HttpServerConf
 			@SuppressWarnings("FutureReturnValueIgnored")
 			public void run() {
 				if (!requestAvailable) {
-					ctx.fireExceptionCaught(RequestTimeoutException.INSTANCE);
+					ctx.fireExceptionCaught(RequestTimeoutException.requestTimedOut());
 					//"FutureReturnValueIgnored" this is deliberate
 					ctx.close();
 				}

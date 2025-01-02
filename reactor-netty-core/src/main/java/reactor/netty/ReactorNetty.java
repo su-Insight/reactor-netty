@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011-2023 VMware, Inc. or its affiliates, All Rights Reserved.
+ * Copyright (c) 2011-2024 VMware, Inc. or its affiliates, All Rights Reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -23,6 +23,7 @@ import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.Callable;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.BiConsumer;
 import java.util.function.BiFunction;
@@ -197,6 +198,11 @@ public final class ReactorNetty {
 	 *  Specifies the zone id used by the access log.
 	 */
 	public static final ZoneId ZONE_ID_SYSTEM = ZoneId.systemDefault();
+
+	/**
+	 * Default prefetch size ({@link Subscription#request(long)}) for data stream Publisher, fallback to 128.
+	 */
+	public static final String REACTOR_NETTY_SEND_MAX_PREFETCH_SIZE = "reactor.netty.send.maxPrefetchSize";
 
 	/**
 	 * Try to call {@link ReferenceCounted#release()} if the specified message implements {@link ReferenceCounted}.
@@ -716,18 +722,21 @@ public final class ReactorNetty {
 	 * An appending write that delegates to its origin context and append the passed
 	 * publisher after the origin success if any.
 	 */
-	static final class OutboundThen implements NettyOutbound {
+	static final class OutboundThen extends AtomicBoolean implements NettyOutbound {
 
 		final NettyOutbound source;
 		final Mono<Void> thenMono;
 
 		static final Runnable EMPTY_CLEANUP = () -> {};
 
-
 		OutboundThen(NettyOutbound source, Publisher<Void> thenPublisher) {
 			this(source, thenPublisher, EMPTY_CLEANUP);
 		}
 
+		// This construction is used only with ChannelOperations#sendObject
+		// The implementation relies on Netty's promise that Channel#writeAndFlush will release the buffer on success/error
+		// The onCleanup callback is invoked only in case when we are sure that the processing doesn't delegate to Netty
+		// because of some failure before the exchange can be continued in the thenPublisher
 		OutboundThen(NettyOutbound source, Publisher<Void> thenPublisher, Runnable onCleanup) {
 			this.source = source;
 			Objects.requireNonNull(onCleanup, "onCleanup");
@@ -735,23 +744,21 @@ public final class ReactorNetty {
 			Mono<Void> parentMono = source.then();
 
 			if (parentMono == Mono.<Void>empty()) {
-				if (onCleanup == EMPTY_CLEANUP) {
-					this.thenMono = Mono.from(thenPublisher);
-				}
-				else {
-					this.thenMono = Mono.from(thenPublisher)
-					                    .doOnCancel(onCleanup)
-					                    .doOnError(t -> onCleanup.run());
-				}
+				this.thenMono = Mono.from(thenPublisher);
 			}
 			else {
 				if (onCleanup == EMPTY_CLEANUP) {
 					this.thenMono = parentMono.thenEmpty(thenPublisher);
 				}
 				else {
-					this.thenMono = parentMono.thenEmpty(thenPublisher)
-					                          .doOnCancel(onCleanup)
-					                          .doOnError(t -> onCleanup.run());
+					this.thenMono = parentMono
+							.doFinally(signalType -> {
+								if ((signalType == SignalType.CANCEL || signalType == SignalType.ON_ERROR) &&
+										compareAndSet(false, true)) {
+									onCleanup.run();
+								}
+							})
+							.thenEmpty(thenPublisher);
 				}
 			}
 		}

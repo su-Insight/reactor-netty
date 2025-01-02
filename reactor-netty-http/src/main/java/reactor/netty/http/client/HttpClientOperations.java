@@ -40,6 +40,7 @@ import io.netty.buffer.Unpooled;
 import io.netty.channel.ChannelFuture;
 import io.netty.channel.ChannelHandler;
 import io.netty.channel.ChannelHandlerContext;
+import io.netty.channel.socket.SocketChannel;
 import io.netty.handler.codec.compression.ZlibCodecFactory;
 import io.netty.handler.codec.http.DefaultFullHttpRequest;
 import io.netty.handler.codec.http.DefaultHttpRequest;
@@ -114,6 +115,7 @@ class HttpClientOperations extends HttpOperations<NettyInbound, NettyOutbound>
 	final ClientCookieDecoder    cookieDecoder;
 	final List<Cookie>           cookieList;
 	final Sinks.One<HttpHeaders> trailerHeaders;
+	final HttpVersion            version;
 
 	Supplier<String>[]          redirectedFrom = EMPTY_REDIRECTIONS;
 	String                      resourceUrl;
@@ -157,6 +159,7 @@ class HttpClientOperations extends HttpOperations<NettyInbound, NettyOutbound>
 		this.responseTimeout = replaced.responseTimeout;
 		this.is100Continue = replaced.is100Continue;
 		this.trailerHeaders = replaced.trailerHeaders;
+		this.version = replaced.version;
 		// No need to copy the unprocessedOutboundError field from the replaced instance. The reason for this is that the
 		// "unprocessedOutboundError" field contains an error that occurs when the connection of the HttpClientOperations
 		// is already closed. In essence, this error represents the final state for the HttpClientOperations, and there's
@@ -174,6 +177,24 @@ class HttpClientOperations extends HttpOperations<NettyInbound, NettyOutbound>
 		this.cookieDecoder = decoder;
 		this.cookieEncoder = encoder;
 		this.cookieList = new ArrayList<>();
+		if (c.channel() instanceof Http2StreamChannel) {
+			this.version = H2;
+		}
+		else if (c.channel() instanceof SocketChannel) {
+			HttpVersion version = this.nettyRequest.protocolVersion();
+			if (version.equals(HttpVersion.HTTP_1_0)) {
+				this.version = HttpVersion.HTTP_1_0;
+			}
+			else if (version.equals(HttpVersion.HTTP_1_1)) {
+				this.version = HttpVersion.HTTP_1_1;
+			}
+			else {
+				throw new IllegalStateException(version.protocolName() + " not supported");
+			}
+		}
+		else {
+			this.version = H3;
+		}
 		this.trailerHeaders = Sinks.unsafe().one();
 	}
 
@@ -528,7 +549,10 @@ class HttpClientOperations extends HttpOperations<NettyInbound, NettyOutbound>
 
 	@Override
 	public final String fullPath() {
-		return this.path;
+		if (path == null) {
+			path = resolvePath(uri());
+		}
+		return path;
 	}
 
 	@Override
@@ -538,14 +562,7 @@ class HttpClientOperations extends HttpOperations<NettyInbound, NettyOutbound>
 
 	@Override
 	public final HttpVersion version() {
-		HttpVersion version = this.nettyRequest.protocolVersion();
-		if (version.equals(HttpVersion.HTTP_1_0)) {
-			return HttpVersion.HTTP_1_0;
-		}
-		else if (version.equals(HttpVersion.HTTP_1_1)) {
-			return HttpVersion.HTTP_1_1;
-		}
-		throw new IllegalStateException(version.protocolName() + " not supported");
+		return version;
 	}
 
 	/**
@@ -683,11 +700,10 @@ class HttpClientOperations extends HttpOperations<NettyInbound, NettyOutbound>
 	protected void onInboundNext(ChannelHandlerContext ctx, Object msg) {
 		if (msg instanceof HttpResponse) {
 			HttpResponse response = (HttpResponse) msg;
-			if (response.decoderResult()
-			            .isFailure()) {
-				onInboundError(response.decoderResult()
-				                       .cause());
+			if (response.decoderResult().isFailure()) {
+				onInboundError(response.decoderResult().cause());
 				ReferenceCountUtil.release(msg);
+				terminate();
 				return;
 			}
 			if (HttpResponseStatus.CONTINUE.equals(response.status())) {
@@ -750,8 +766,16 @@ class HttpClientOperations extends HttpOperations<NettyInbound, NettyOutbound>
 		}
 
 		if (msg instanceof LastHttpContent) {
+			LastHttpContent lastHttpContent = (LastHttpContent) msg;
+			if (lastHttpContent.decoderResult().isFailure()) {
+				onInboundError(lastHttpContent.decoderResult().cause());
+				lastHttpContent.release();
+				terminate();
+				return;
+			}
+
 			if (is100Continue) {
-				ReferenceCountUtil.release(msg);
+				lastHttpContent.release();
 				channel().read();
 				return;
 			}
@@ -760,20 +784,20 @@ class HttpClientOperations extends HttpOperations<NettyInbound, NettyOutbound>
 					log.debug(format(channel(), "HttpClientOperations received an incorrect end " +
 							"delimiter (previously used connection?)"));
 				}
-				ReferenceCountUtil.release(msg);
+				lastHttpContent.release();
 				return;
 			}
 			if (log.isDebugEnabled()) {
 				log.debug(format(channel(), "Received last HTTP packet"));
 			}
-			if (msg != LastHttpContent.EMPTY_LAST_CONTENT) {
+			if (lastHttpContent != LastHttpContent.EMPTY_LAST_CONTENT) {
 				// When there is HTTP/2 response with INBOUND HEADERS(endStream=false) followed by INBOUND DATA(endStream=true length=0),
 				// Netty sends LastHttpContent with empty buffer instead of EMPTY_LAST_CONTENT
-				if (redirecting != null || ((LastHttpContent) msg).content().readableBytes() == 0) {
-					ReferenceCountUtil.release(msg);
+				if (redirecting != null || lastHttpContent.content().readableBytes() == 0) {
+					lastHttpContent.release();
 				}
 				else {
-					super.onInboundNext(ctx, msg);
+					super.onInboundNext(ctx, lastHttpContent);
 				}
 			}
 
@@ -782,7 +806,7 @@ class HttpClientOperations extends HttpOperations<NettyInbound, NettyOutbound>
 				// Whether there are subscribers or the subscriber cancels is not of interest
 				// Evaluated EmitResult: FAIL_TERMINATED, FAIL_OVERFLOW, FAIL_CANCELLED, FAIL_NON_SERIALIZED
 				// FAIL_ZERO_SUBSCRIBER
-				trailerHeaders.tryEmitValue(((LastHttpContent) msg).trailingHeaders());
+				trailerHeaders.tryEmitValue(lastHttpContent.trailingHeaders());
 			}
 
 			//force auto read to enable more accurate close selection now inbound is done
@@ -1058,6 +1082,8 @@ class HttpClientOperations extends HttpOperations<NettyInbound, NettyOutbound>
 		}
 	}
 
+	static final HttpVersion            H2 = HttpVersion.valueOf("HTTP/2.0");
+	static final HttpVersion            H3 = HttpVersion.valueOf("HTTP/3.0");
 	static final int                    MAX_REDIRECTS      = 50;
 	@SuppressWarnings({"unchecked", "rawtypes"})
 	static final Supplier<String>[]     EMPTY_REDIRECTIONS = (Supplier<String>[]) new Supplier[0];

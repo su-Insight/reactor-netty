@@ -15,7 +15,6 @@
  */
 package reactor.netty.http;
 
-import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
 import io.netty.handler.codec.http2.Http2Connection;
 import io.netty.handler.codec.http2.Http2FrameCodec;
@@ -26,7 +25,6 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.MethodSource;
 import org.mockito.Mockito;
-import org.reactivestreams.Publisher;
 import reactor.core.Disposable;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -35,7 +33,6 @@ import reactor.core.publisher.Sinks;
 import reactor.core.scheduler.Schedulers;
 import reactor.netty.BaseHttpTest;
 import reactor.netty.ByteBufFlux;
-import reactor.netty.ByteBufMono;
 import reactor.netty.http.client.HttpClient;
 import reactor.netty.http.server.HttpServer;
 import reactor.netty.internal.shaded.reactor.pool.PoolAcquireTimeoutException;
@@ -53,7 +50,6 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.BiFunction;
 import java.util.function.Predicate;
 import java.util.stream.IntStream;
@@ -367,48 +363,6 @@ class Http2Tests extends BaseHttpTest {
 	}
 
 	@Test
-	void testMonoRequestBodySentAsFullRequest_Flux() {
-		// sends the message and then last http content
-		doTestMonoRequestBodySentAsFullRequest(ByteBufFlux.fromString(Mono.just("test")), 2);
-	}
-
-	@Test
-	void testMonoRequestBodySentAsFullRequest_Mono() {
-		// sends "full" request
-		doTestMonoRequestBodySentAsFullRequest(ByteBufMono.fromString(Mono.just("test")), 1);
-	}
-
-	@SuppressWarnings("deprecation")
-	private void doTestMonoRequestBodySentAsFullRequest(Publisher<? extends ByteBuf> body, int expectedMsg) {
-		Http2SslContextSpec serverCtx = Http2SslContextSpec.forServer(ssc.certificate(), ssc.privateKey());
-		Http2SslContextSpec clientCtx =
-				Http2SslContextSpec.forClient()
-				                   .configure(builder -> builder.trustManager(InsecureTrustManagerFactory.INSTANCE));
-
-		AtomicInteger counter = new AtomicInteger();
-		disposableServer =
-				createServer()
-				          .protocol(HttpProtocol.H2)
-				          .secure(spec -> spec.sslContext(serverCtx))
-				          .handle((req, res) -> req.receiveContent()
-				                                   .doOnNext(httpContent -> counter.getAndIncrement())
-				                                   .then(res.send()))
-				          .bindNow(Duration.ofSeconds(30));
-
-		createClient(disposableServer.port())
-		          .protocol(HttpProtocol.H2)
-		          .secure(spec -> spec.sslContext(clientCtx))
-		          .post()
-		          .uri("/")
-		          .send(body)
-		          .responseContent()
-		          .aggregate()
-		          .block(Duration.ofSeconds(30));
-
-		assertThat(counter.get()).isEqualTo(expectedMsg);
-	}
-
-	@Test
 	void testIssue1394_SchemeHttpConfiguredH2CNegotiatedH2C() {
 		// "prior-knowledge" is used and stream id is 3
 		doTestIssue1394_SchemeHttp("3", HttpProtocol.H2C);
@@ -703,7 +657,7 @@ class Http2Tests extends BaseHttpTest {
 		    .as(StepVerifier::create)
 		    .assertNext(t -> assertThat(t.getT1()).isNotNull().hasSize(2).allMatch("doTestMaxStreams"::equals))
 		    .expectComplete()
-		    .verify(Duration.ofSeconds(5));
+		    .verify(Duration.ofSeconds(10));
 	}
 
 	@ParameterizedTest
@@ -740,6 +694,6 @@ class Http2Tests extends BaseHttpTest {
 		      .as(StepVerifier::create)
 		      .expectNextMatches(buf -> expectation.equals(buf.toString(Charset.defaultCharset())))
 		      .expectComplete()
-		      .verify(Duration.ofSeconds(5));
+		      .verify(Duration.ofSeconds(10));
 	}
 }

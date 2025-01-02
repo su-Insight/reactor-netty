@@ -18,11 +18,13 @@ package reactor.netty.http.server;
 import io.netty.buffer.ByteBuf;
 import io.netty.channel.ChannelDuplexHandler;
 import io.netty.channel.ChannelFuture;
-import io.netty.channel.ChannelFutureListener;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelPromise;
 import io.netty.handler.codec.DecoderResult;
+import io.netty.handler.codec.http.DefaultFullHttpResponse;
 import io.netty.handler.codec.http.DefaultHttpContent;
+import io.netty.handler.codec.http.DefaultHttpResponse;
+import io.netty.handler.codec.http.DefaultLastHttpContent;
 import io.netty.handler.codec.http.HttpObject;
 import io.netty.handler.codec.http.HttpRequest;
 import io.netty.handler.codec.http.HttpResponse;
@@ -47,9 +49,10 @@ import java.time.ZonedDateTime;
 import java.util.function.BiFunction;
 import java.util.function.BiPredicate;
 
+import static io.netty.handler.codec.http.LastHttpContent.EMPTY_LAST_CONTENT;
 import static reactor.netty.ReactorNetty.format;
 
-final class Http3StreamBridgeServerHandler extends ChannelDuplexHandler implements ChannelFutureListener {
+final class Http3StreamBridgeServerHandler extends ChannelDuplexHandler {
 	final BiPredicate<HttpServerRequest, HttpServerResponse>      compress;
 	final ServerCookieDecoder                                     cookieDecoder;
 	final ServerCookieEncoder                                     cookieEncoder;
@@ -143,7 +146,7 @@ final class Http3StreamBridgeServerHandler extends ChannelDuplexHandler implemen
 			catch (RuntimeException e) {
 				pendingResponse = false;
 				request.setDecoderResult(DecoderResult.failure(e.getCause() != null ? e.getCause() : e));
-				HttpServerOperations.sendDecodingFailures(ctx, listener, true, e, msg, httpMessageLogFactory, true, timestamp, connectionInfo, remoteAddress);
+				HttpServerOperations.sendDecodingFailures(ctx, listener, true, e, msg, httpMessageLogFactory, true, timestamp, connectionInfo, remoteAddress, true);
 				return;
 			}
 			ops.bind();
@@ -166,11 +169,27 @@ final class Http3StreamBridgeServerHandler extends ChannelDuplexHandler implemen
 	@Override
 	@SuppressWarnings("FutureReturnValueIgnored")
 	public void write(ChannelHandlerContext ctx, Object msg, ChannelPromise promise) {
-		if (msg instanceof ByteBuf) {
+		Class<?> msgClass = msg.getClass();
+		if (msgClass == DefaultHttpResponse.class) {
+			//"FutureReturnValueIgnored" this is deliberate
+			ctx.write(msg, promise);
+		}
+		else if (msgClass == DefaultFullHttpResponse.class) {
+			//"FutureReturnValueIgnored" this is deliberate
+			ChannelFuture f = ctx.write(msg, promise);
+			if (HttpResponseStatus.CONTINUE.code() == ((DefaultFullHttpResponse) msg).status().code()) {
+				return;
+			}
+			finalizeResponse(ctx, f);
+		}
+		else if (msg == EMPTY_LAST_CONTENT || msgClass == DefaultLastHttpContent.class) {
+			finalizeResponse(ctx, ctx.write(msg, promise));
+		}
+		else if (msg instanceof ByteBuf) {
 			//"FutureReturnValueIgnored" this is deliberate
 			ctx.write(new DefaultHttpContent((ByteBuf) msg), promise);
 		}
-		else if (msg instanceof HttpResponse && HttpResponseStatus.CONTINUE.equals(((HttpResponse) msg).status())) {
+		else if (msg instanceof HttpResponse && HttpResponseStatus.CONTINUE.code() == ((HttpResponse) msg).status().code()) {
 			//"FutureReturnValueIgnored" this is deliberate
 			ctx.write(msg, promise);
 		}
@@ -178,30 +197,14 @@ final class Http3StreamBridgeServerHandler extends ChannelDuplexHandler implemen
 			//"FutureReturnValueIgnored" this is deliberate
 			ChannelFuture f = ctx.write(msg, promise);
 			if (msg instanceof LastHttpContent) {
-				pendingResponse = false;
-				f.addListener(this)
-				 .addListener(QuicStreamChannel.SHUTDOWN_OUTPUT);
-				ctx.read();
+				finalizeResponse(ctx, f);
 			}
 		}
 	}
 
-	@Override
-	public void operationComplete(ChannelFuture future) {
-		if (!future.isSuccess()) {
-			if (HttpServerOperations.log.isDebugEnabled()) {
-				HttpServerOperations.log.debug(format(future.channel(),
-								"Sending last HTTP packet was not successful, terminating the channel"),
-						future.cause());
-			}
-		}
-		else {
-			if (HttpServerOperations.log.isDebugEnabled()) {
-				HttpServerOperations.log.debug(format(future.channel(),
-						"Last HTTP packet was sent, terminating the channel"));
-			}
-		}
-
-		HttpServerOperations.cleanHandlerTerminate(future.channel());
+	void finalizeResponse(ChannelHandlerContext ctx, ChannelFuture f) {
+		pendingResponse = false;
+		f.addListener(QuicStreamChannel.SHUTDOWN_OUTPUT);
+		ctx.read();
 	}
 }

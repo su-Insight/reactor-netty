@@ -20,6 +20,8 @@ apply plugin: 'me.champeau.gradle.japicmp'
 apply plugin: 'de.undercouch.download'
 apply plugin: 'biz.aQute.bnd.builder'
 
+apply from: "${rootDir}/gradle/toolchains.gradle"
+
 ext {
 	bndOptions = [
 			"Export-Package" : "reactor.netty.http*;version=$osgiVersion;-noimport:=true",
@@ -47,6 +49,10 @@ sourceSets {
 		compileClasspath += sourceSets.main.output
 		runtimeClasspath += sourceSets.main.output
 	}
+	http3Test {
+		compileClasspath += sourceSets.main.output
+		runtimeClasspath += sourceSets.main.output
+	}
 }
 
 configurations {
@@ -57,6 +63,8 @@ configurations {
 	noMicrometerTestRuntimeOnly.extendsFrom(runtimeOnly)
 	contextPropagationTestImplementation.extendsFrom(implementation)
 	contextPropagationTestRuntimeOnly.extendsFrom(runtimeOnly)
+	http3TestImplementation.extendsFrom(implementation)
+	http3TestRuntimeOnly.extendsFrom(runtimeOnly)
 }
 
 dependencies {
@@ -170,6 +178,13 @@ dependencies {
 	// Needed for HTTP/2 testing
 	testRuntimeOnly "io.netty:netty-tcnative-boringssl-static:$boringSslVersion$os_suffix"
 
+	if (project.hasProperty("testToolchain")) {
+		if (testToolchain == "17") {
+			// Necessary for generating SelfSignedCertificate on Java version >= 15
+			testRuntimeOnly "org.bouncycastle:bcpkix-jdk15on:$bouncycastleVersion"
+		}
+	}
+
 	// noMicrometerTest sourceSet (must not include Micrometer)
 	noMicrometerTestImplementation "org.assertj:assertj-core:$assertJVersion"
 	noMicrometerTestImplementation "org.junit.jupiter:junit-jupiter-api:$junitVersion"
@@ -183,6 +198,17 @@ dependencies {
 	contextPropagationTestImplementation "ch.qos.logback:logback-classic:$logbackVersion"
 	contextPropagationTestImplementation "io.micrometer:context-propagation:$contextPropagationVersion"
 	contextPropagationTestRuntimeOnly "org.junit.jupiter:junit-jupiter-engine:$junitVersion"
+
+	http3TestImplementation(testFixtures(project(':reactor-netty-core'))) {
+		exclude module: "reactor-netty-core"
+	}
+	http3TestCompileOnly "com.google.code.findbugs:jsr305:$jsr305Version"
+	http3TestImplementation "io.projectreactor:reactor-test:$testAddonVersion"
+	http3TestImplementation "org.assertj:assertj-core:$assertJVersion"
+	http3TestImplementation "org.junit.jupiter:junit-jupiter-api:$junitVersion"
+	http3TestImplementation "io.netty.incubator:netty-incubator-codec-http3:$nettyHttp3Version"
+	http3TestRuntimeOnly "org.junit.jupiter:junit-jupiter-engine:$junitVersion"
+	http3TestRuntimeOnly "ch.qos.logback:logback-classic:$logbackVersion"
 }
 
 jar {
@@ -273,5 +299,12 @@ task contextPropagationTest(type: Test) {
 }
 
 tasks.check.dependsOn(contextPropagationTest)
+
+task http3Test(type: Test) {
+	testClassesDirs = sourceSets.http3Test.output.classesDirs
+	classpath = sourceSets.http3Test.runtimeClasspath
+}
+
+tasks.check.dependsOn(http3Test)
 
 description = "HTTP functionality for the Reactor Netty library"

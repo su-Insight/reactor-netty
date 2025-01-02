@@ -20,11 +20,15 @@ import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
 import io.netty.buffer.ByteBuf;
+import io.netty.buffer.Unpooled;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelHandler;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInboundHandlerAdapter;
+import io.netty.channel.ChannelOutboundHandlerAdapter;
 import io.netty.channel.ChannelPipeline;
+import io.netty.channel.ChannelPromise;
+import io.netty.handler.codec.http.HttpClientCodec;
 import io.netty.handler.codec.http.HttpContent;
 import io.netty.handler.codec.http.HttpHeaderNames;
 import io.netty.handler.codec.http.HttpHeaderValues;
@@ -78,6 +82,7 @@ import java.lang.annotation.RetentionPolicy;
 import java.lang.annotation.Target;
 import java.net.InetSocketAddress;
 import java.net.SocketAddress;
+import java.nio.charset.Charset;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -85,6 +90,7 @@ import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BiFunction;
@@ -116,28 +122,28 @@ class HttpProtocolsTests extends BaseHttpTest {
 
 	@Retention(RetentionPolicy.RUNTIME)
 	@Target(ElementType.METHOD)
-	@ParameterizedTest(name = "{displayName}({0}, {1})")
+	@ParameterizedTest
 	@MethodSource("dataAllCombinations")
 	@interface ParameterizedAllCombinationsTest {
 	}
 
 	@Retention(RetentionPolicy.RUNTIME)
 	@Target(ElementType.METHOD)
-	@ParameterizedTest(name = "{displayName}({0}, {1})")
+	@ParameterizedTest
 	@MethodSource("dataCompatibleCombinations")
 	@interface ParameterizedCompatibleCombinationsTest {
 	}
 
 	@Retention(RetentionPolicy.RUNTIME)
 	@Target(ElementType.METHOD)
-	@ParameterizedTest(name = "{displayName}({0}, {1})")
+	@ParameterizedTest
 	@MethodSource("dataCompatibleCombinations_NoPool")
 	@interface ParameterizedCompatibleCombinationsNoPoolTest {
 	}
 
 	@Retention(RetentionPolicy.RUNTIME)
 	@Target(ElementType.METHOD)
-	@ParameterizedTest(name = "{displayName}({0}, {1})")
+	@ParameterizedTest
 	@MethodSource("dataCompatibleCombinations_CustomPool")
 	@interface ParameterizedCompatibleCombinationsCustomPoolTest {
 	}
@@ -793,10 +799,13 @@ class HttpProtocolsTests extends BaseHttpTest {
 				      })
 				      .handle((req, res) ->
 				          res.withConnection(conn -> {
-				                  ChannelHandler handler = conn.channel().pipeline().get(NettyPipeline.ReadTimeoutHandler);
-				                  if (handler != null) {
-				                      handlerAvailable.get().add(true);
-				                      timeout.get().add(((ReadTimeoutHandler) handler).getReaderIdleTimeInMillis());
+				                  if (!((serverProtocols.length == 2 && serverProtocols[1] == HttpProtocol.H2C) &&
+				                          (clientProtocols.length == 2 && clientProtocols[1] == HttpProtocol.H2C))) {
+				                      ChannelHandler handler = conn.channel().pipeline().get(NettyPipeline.ReadTimeoutHandler);
+				                      if (handler != null) {
+				                          handlerAvailable.get().add(true);
+				                          timeout.get().add(((ReadTimeoutHandler) handler).getReaderIdleTimeInMillis());
+				                      }
 				                  }
 				                  conn.onTerminate().subscribe(null, null, () -> {
 				                      onTerminate.get().add(conn.channel().isActive() &&
@@ -865,6 +874,7 @@ class HttpProtocolsTests extends BaseHttpTest {
 		assertThat(onError).isEqualTo(2);
 	}
 
+	@ParameterizedCompatibleCombinationsTest
 	void test100Continue(HttpServer server, HttpClient client) throws Exception {
 		CountDownLatch latch = new CountDownLatch(1);
 		disposableServer =
@@ -984,6 +994,136 @@ class HttpProtocolsTests extends BaseHttpTest {
 		}
 	}
 
+	@ParameterizedCompatibleCombinationsTest
+	void testProtocolVersion(HttpServer server, HttpClient client) {
+		HttpProtocol[] serverProtocols = server.configuration().protocols();
+		HttpProtocol[] clientProtocols = client.configuration().protocols();
+		String configuredProtocol = (serverProtocols.length == 1 && serverProtocols[0] == HttpProtocol.HTTP11) ||
+				(clientProtocols.length == 1 && clientProtocols[0] == HttpProtocol.HTTP11) ? "HTTP/1.1" : "HTTP/2.0";
+
+		disposableServer =
+				server.handle((req, res) -> res.sendString(Mono.just(req.protocol())))
+				      .bindNow();
+
+		client.port(disposableServer.port())
+		      .get()
+		      .uri("/")
+		      .responseSingle((res, bytes) -> bytes.asString().zipWith(Mono.just(res.version().text())))
+		      .as(StepVerifier::create)
+		      .expectNextMatches(t -> t.getT1().equals(t.getT2()) && t.getT1().equals(configuredProtocol))
+		      .expectComplete()
+		      .verify(Duration.ofSeconds(5));
+	}
+
+	@ParameterizedCompatibleCombinationsTest
+	void testMonoRequestBodySentAsFullRequest_Flux(HttpServer server, HttpClient client) {
+		// sends the message and then last http content
+		testRequestBody(server, client, sender -> sender.send(ByteBufFlux.fromString(Mono.just("test"))), 2);
+	}
+
+	@ParameterizedCompatibleCombinationsTest
+	void testMonoRequestBodySentAsFullRequest_Mono(HttpServer server, HttpClient client) {
+		// sends "full" request
+		testRequestBody(server, client, sender -> sender.send(ByteBufMono.fromString(Mono.just("test"))), 1);
+	}
+
+	@ParameterizedCompatibleCombinationsTest
+	void testMonoRequestBodySentAsFullRequest_MonoEmpty(HttpServer server, HttpClient client) {
+		// sends "full" request
+		testRequestBody(server, client, sender -> sender.send(Mono.empty()), 1);
+	}
+
+	@ParameterizedCompatibleCombinationsTest
+	void testIssue3524Flux(HttpServer server, HttpClient client) {
+		// sends the message and then last http content
+		testRequestBody(server, client, sender -> sender.send((req, out) -> out.sendString(Flux.just("te", "st"))), 3);
+	}
+
+	@ParameterizedCompatibleCombinationsTest
+	void testIssue3524Mono(HttpServer server, HttpClient client) {
+		// sends "full" request
+		testRequestBody(server, client, sender -> sender.send((req, out) -> out.sendString(Mono.just("test"))), 1);
+	}
+
+	@ParameterizedCompatibleCombinationsTest
+	void testIssue3524MonoEmpty(HttpServer server, HttpClient client) {
+		// sends "full" request
+		testRequestBody(server, client, sender -> sender.send((req, out) -> Mono.empty()), 1);
+	}
+
+	@ParameterizedCompatibleCombinationsTest
+	void testIssue3524NoBody(HttpServer server, HttpClient client) {
+		// sends "full" request
+		testRequestBody(server, client, sender -> sender.send((req, out) -> out), 1);
+	}
+
+	@ParameterizedCompatibleCombinationsTest
+	void testIssue3524Object(HttpServer server, HttpClient client) {
+		// sends "full" request
+		testRequestBody(server, client,
+				sender -> sender.send((req, out) -> out.sendObject(Unpooled.wrappedBuffer("test".getBytes(Charset.defaultCharset())))), 1);
+	}
+
+	@SuppressWarnings("FutureReturnValueIgnored")
+	private void testRequestBody(HttpServer server, HttpClient client,
+			Function<HttpClient.RequestSender, HttpClient.ResponseReceiver<?>> sendFunction, int expectedMsg) {
+		disposableServer =
+				server.handle((req, res) -> req.receive()
+				                               .then(res.send()))
+				      .bindNow(Duration.ofSeconds(30));
+
+		AtomicInteger counter = new AtomicInteger();
+		sendFunction.apply(
+		                client.port(disposableServer.port())
+		                      .doOnRequest((req, conn) -> {
+		                          ChannelPipeline pipeline = conn.channel() instanceof Http2StreamChannel ?
+		                                  conn.channel().parent().pipeline() : conn.channel().pipeline();
+		                          ChannelHandlerContext ctx = pipeline.context(NettyPipeline.HttpCodec);
+		                          if (ctx == null) {
+		                              ctx = pipeline.context(HttpClientCodec.class);
+		                          }
+		                          if (ctx != null) {
+		                              pipeline.addAfter(ctx.name(), "testRequestBody",
+		                                  new ChannelOutboundHandlerAdapter() {
+		                                      boolean done;
+
+		                                      @Override
+		                                      public void write(ChannelHandlerContext ctx, Object msg, ChannelPromise promise) {
+		                                          if (!done) {
+		                                              if (msg instanceof Http2HeadersFrame && ((Http2HeadersFrame) msg).isEndStream()) {
+		                                                      done = true;
+		                                                      counter.getAndIncrement();
+		                                              }
+		                                              else if (msg instanceof Http2DataFrame) {
+		                                                  if (((Http2DataFrame) msg).isEndStream()) {
+		                                                      done = true;
+		                                                  }
+		                                                  counter.getAndIncrement();
+		                                              }
+		                                              else if (msg instanceof LastHttpContent) {
+		                                                  done = true;
+		                                                  counter.getAndIncrement();
+		                                              }
+		                                              else if (msg instanceof ByteBuf) {
+		                                                  counter.getAndIncrement();
+		                                              }
+		                                          }
+		                                          //"FutureReturnValueIgnored" this is deliberate
+		                                          ctx.write(msg, promise);
+		                                      }
+		                                  });
+		                          }
+		                      })
+		                      .post()
+		                      .uri("/"))
+		            .responseContent()
+		            .aggregate()
+		            .asString()
+		            .block(Duration.ofSeconds(30));
+
+		assertThat(counter.get()).isEqualTo(expectedMsg);
+	}
+
 	static final class IdleTimeoutTestChannelInboundHandler extends ChannelInboundHandlerAdapter {
 
 		final CountDownLatch latch = new CountDownLatch(1);
@@ -1030,8 +1170,6 @@ class HttpProtocolsTests extends BaseHttpTest {
 		final AtomicReference<List<Long>> timeout;
 		final CountDownLatch latch;
 
-		boolean added;
-
 		RequestTimeoutTestChannelInboundHandler(
 				AtomicReference<List<Boolean>> handlerAvailable,
 				AtomicReference<List<Boolean>> onTerminate,
@@ -1044,16 +1182,15 @@ class HttpProtocolsTests extends BaseHttpTest {
 		}
 		@Override
 		public void channelRead(ChannelHandlerContext ctx, Object msg) {
-			if (!added && msg instanceof HttpContent) {
+			ctx.fireChannelRead(msg);
+
+			if (msg instanceof HttpRequest) {
 				ChannelHandler handler = ctx.channel().pipeline().get(NettyPipeline.ReadTimeoutHandler);
 				if (handler != null) {
 					handlerAvailable.get().add(true);
 					timeout.get().add(((ReadTimeoutHandler) handler).getReaderIdleTimeInMillis());
 				}
-				added = true;
 			}
-
-			ctx.fireChannelRead(msg);
 		}
 
 		@Override
