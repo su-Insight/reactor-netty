@@ -69,6 +69,7 @@ import io.netty.channel.group.ChannelGroup;
 import io.netty.channel.group.DefaultChannelGroup;
 import io.netty.channel.nio.NioEventLoopGroup;
 import io.netty.channel.unix.DomainSocketAddress;
+import io.netty.handler.codec.compression.Brotli;
 import io.netty.handler.codec.http.DefaultFullHttpResponse;
 import io.netty.handler.codec.http.HttpClientCodec;
 import io.netty.handler.codec.http.HttpContentDecompressor;
@@ -157,6 +158,11 @@ class HttpClientTest extends BaseHttpTest {
 	static void cleanup() throws ExecutionException, InterruptedException, TimeoutException {
 		executor.shutdownGracefully()
 				.get(30, TimeUnit.SECONDS);
+	}
+
+	@BeforeAll
+	static void verifyNettyBrotliIsAvailable() {
+		assertThat(Brotli.isAvailable()).isTrue();
 	}
 
 	@Test
@@ -474,6 +480,46 @@ class HttpClientTest extends BaseHttpTest {
 	}
 
 	@Test
+	void brotliEnabled() {
+		doTestBrotli(true);
+	}
+
+	@Test
+	void brotliDisabled() {
+		doTestBrotli(false);
+	}
+
+	private void doTestBrotli(boolean brotliEnabled) {
+		String expectedResponse = brotliEnabled ? "br" : "no brotli";
+		disposableServer =
+				createServer()
+						.compress(true)
+						.handle((req, res) -> res.sendString(Mono.just(req.requestHeaders()
+								.get(HttpHeaderNames.ACCEPT_ENCODING,
+										"no brotli"))))
+						.bindNow();
+		HttpClient client = createHttpClientForContextWithPort();
+
+		if (brotliEnabled) {
+			assertThat(Brotli.isAvailable()).isTrue();
+			client = client.compress(true);
+			client.configuration().headers = client.configuration().headers()
+							.set(HttpHeaderNames.ACCEPT_ENCODING, HttpHeaderValues.BR);
+		}
+
+		StepVerifier.create(client.get()
+						.uri("/")
+						.response((r, buf) -> buf.asString()
+								.elementAt(0)
+								.zipWith(Mono.just(r))))
+				.expectNextMatches(tuple ->
+						expectedResponse.equals(tuple.getT1())
+								&& (tuple.getT2().status().code() == 200))
+				.expectComplete()
+				.verify(Duration.ofSeconds(30));
+	}
+
+	@Test
 	void gzipEnabled() {
 		doTestGzip(true);
 	}
@@ -492,9 +538,13 @@ class HttpClientTest extends BaseHttpTest {
 				                                                                "no gzip"))))
 				          .bindNow();
 		HttpClient client = createHttpClientForContextWithPort();
+		client.configuration().acceptBrotli = false;
+		client.configuration().acceptGzip = gzipEnabled;
 
 		if (gzipEnabled) {
 			client = client.compress(true);
+			client.configuration().headers = client.configuration().headers()
+			        .set(HttpHeaderNames.ACCEPT_ENCODING, HttpHeaderValues.GZIP);
 		}
 
 		StepVerifier.create(client.get()
@@ -3144,7 +3194,7 @@ class HttpClientTest extends BaseHttpTest {
 				      .responseContent()
 				      .aggregate()
 				      .asString()
-				      .block(Duration.ofSeconds(5));
+				      .block(Duration.ofSeconds(10));
 
 		assertThat(response).isEqualTo("testIssue1697");
 		assertThat(onRequest.get()).isFalse();
@@ -3180,7 +3230,7 @@ class HttpClientTest extends BaseHttpTest {
 	@Test
 	void testHttpClientCancelled() throws InterruptedException {
 		// logged by the server when last http packet is sent and channel is terminated
-		String serverCancelledLog = "[HttpServer] Channel inbound receiver cancelled (operation cancelled).";
+		String serverCancelledLog = "[HttpServer] Channel inbound receiver cancelled (subscription disposed).";
 		// logged by client when cancelled while receiving response
 		String clientCancelledLog = HttpClientOperations.INBOUND_CANCEL_LOG;
 
@@ -3344,6 +3394,66 @@ class HttpClientTest extends BaseHttpTest {
 		finally {
 			serverLoop.disposeLater()
 			          .block(Duration.ofSeconds(5));
+		}
+	}
+
+	@Test
+	void testIssue3285NoOperations() throws Exception {
+		testIssue3285("HTTP/1.1 200 OK\r\nContent-Length:4\r\n\r\ntest\r\n\r\nsomething\r\n\r\n", null);
+	}
+
+	@Test
+	void testIssue3285LastContent() throws Exception {
+		testIssue3285("HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\ntest\r\n\r\n", NumberFormatException.class);
+	}
+
+	@Test
+	void testIssue3285HttpResponse() throws Exception {
+		testIssue3285("HTTP/1 200 OK\r\n\r\n", IllegalArgumentException.class);
+	}
+
+	void testIssue3285(String serverResponse, @Nullable Class<? extends Throwable> expectedException) throws Exception {
+		disposableServer =
+				TcpServer.create()
+				         .host("localhost")
+				         .port(0)
+				         .wiretap(true)
+				         .handle((in, out) -> in.receive().flatMap(b -> out.sendString(Mono.just(serverResponse))))
+				         .bindNow();
+
+		CountDownLatch latch = new CountDownLatch(2);
+		ConnectionProvider provider = ConnectionProvider.create("testIssue3285", 1);
+		HttpClient client = createHttpClientForContextWithAddress(provider)
+				.doOnRequest((req, conn) -> conn.channel().closeFuture().addListener(f -> latch.countDown()));
+
+		try (LogTracker logTracker = new LogTracker("reactor.netty.channel.ChannelOperationsHandler", 2, "Decoding failed.")) {
+			testIssue3285SendRequest(client, expectedException);
+
+			testIssue3285SendRequest(client, expectedException);
+
+			assertThat(latch.await(5, TimeUnit.SECONDS)).isTrue();
+
+			if (expectedException == null) {
+				assertThat(logTracker.latch.await(5, TimeUnit.SECONDS)).isTrue();
+			}
+		}
+	}
+
+	static void testIssue3285SendRequest(HttpClient client, @Nullable Class<? extends Throwable> exception) {
+		Mono<String> response =
+				client.get()
+				      .uri("/")
+				      .responseSingle((res, bytes) -> bytes.asString());
+		if (exception != null) {
+			response.as(StepVerifier::create)
+			        .expectError(exception)
+			        .verify(Duration.ofSeconds(5));
+		}
+		else {
+			response.as(StepVerifier::create)
+			        .expectNext("test")
+			        .expectComplete()
+			        .verify(Duration.ofSeconds(5));
 		}
 	}
 }

@@ -15,6 +15,7 @@
  */
 package reactor.netty.http.client;
 
+import java.net.InetSocketAddress;
 import java.net.SocketAddress;
 import java.net.URI;
 import java.time.Duration;
@@ -29,6 +30,7 @@ import java.util.function.Supplier;
 
 import io.netty.buffer.ByteBuf;
 import io.netty.handler.codec.DecoderException;
+import io.netty.handler.codec.compression.Brotli;
 import io.netty.handler.codec.http.HttpHeaderNames;
 import io.netty.handler.codec.http.HttpHeaderValues;
 import io.netty.handler.codec.http.HttpHeaders;
@@ -53,6 +55,7 @@ import reactor.netty.ConnectionObserver;
 import reactor.netty.NettyOutbound;
 import reactor.netty.channel.ChannelMetricsRecorder;
 import reactor.netty.http.Http2SettingsSpec;
+import reactor.netty.http.Http3SettingsSpec;
 import reactor.netty.http.HttpProtocol;
 import reactor.netty.http.logging.HttpMessageLogFactory;
 import reactor.netty.http.logging.ReactorNettyHttpMessageLogFactory;
@@ -65,7 +68,11 @@ import reactor.netty.tcp.TcpClient;
 import reactor.netty.transport.ClientTransport;
 import reactor.util.Logger;
 import reactor.util.Loggers;
+import reactor.util.annotation.Incubating;
 import reactor.util.annotation.Nullable;
+
+import static reactor.netty.http.client.HttpClientConfig.h3;
+import static reactor.netty.http.internal.Http3.isHttp3Available;
 
 /**
  * An HttpClient allows building in a safe immutable way an http client that is
@@ -515,7 +522,13 @@ public abstract class HttpClient extends ClientTransport<HttpClient, HttpClientC
 	 * @return a new {@link HttpClient}
 	 */
 	public final HttpClient compress(boolean compressionEnabled) {
+		configuration().headers.remove(HttpHeaderNames.ACCEPT_ENCODING);
 		if (compressionEnabled) {
+			configuration().acceptBrotli = Brotli.isAvailable();
+			if (configuration().acceptBrotli) {
+				configuration().headers.add(HttpHeaderNames.ACCEPT_ENCODING, HttpHeaderValues.BR);
+			}
+
 			if (!configuration().acceptGzip) {
 				HttpClient dup = duplicate();
 				HttpHeaders headers = configuration().headers.copy();
@@ -525,7 +538,7 @@ public abstract class HttpClient extends ClientTransport<HttpClient, HttpClientC
 				return dup;
 			}
 		}
-		else if (configuration().acceptGzip) {
+		else if (configuration().acceptGzip || configuration().acceptBrotli) {
 			HttpClient dup = duplicate();
 			if (isCompressing(configuration().headers)) {
 				HttpHeaders headers = configuration().headers.copy();
@@ -533,6 +546,7 @@ public abstract class HttpClient extends ClientTransport<HttpClient, HttpClientC
 				dup.configuration().headers = headers;
 			}
 			dup.configuration().acceptGzip = false;
+			dup.configuration().acceptBrotli = false;
 			return dup;
 		}
 		return this;
@@ -1085,6 +1099,32 @@ public abstract class HttpClient extends ClientTransport<HttpClient, HttpClientC
 	}
 
 	/**
+	 * Apply HTTP/3 configuration.
+	 *
+	 * @param http3Settings configures {@link Http3SettingsSpec} before requesting
+	 * @return a new {@link HttpClient}
+	 * @since 1.2.0
+	 */
+	@Incubating
+	public final HttpClient http3Settings(Consumer<Http3SettingsSpec.Builder> http3Settings) {
+		Objects.requireNonNull(http3Settings, "http3Settings");
+		if (!isHttp3Available()) {
+			throw new UnsupportedOperationException(
+					"To enable HTTP/3 support, you must add the dependency `io.netty.incubator:netty-incubator-codec-http3`" +
+							" to the class path first");
+		}
+		Http3SettingsSpec.Builder builder = Http3SettingsSpec.builder();
+		http3Settings.accept(builder);
+		Http3SettingsSpec settings = builder.build();
+		if (settings.equals(configuration().http3Settings)) {
+			return this;
+		}
+		HttpClient dup = duplicate();
+		dup.configuration().http3Settings = settings;
+		return dup;
+	}
+
+	/**
 	 * When {@link HttpMessage} is about to be logged the configured factory will be used for
 	 * generating a sanitized log message.
 	 * <p>
@@ -1324,9 +1364,22 @@ public abstract class HttpClient extends ClientTransport<HttpClient, HttpClientC
 		HttpClientConfig config = dup.configuration();
 		config.protocols(supportedProtocols);
 
+		if (config.checkProtocol(h3)) {
+			if (!isHttp3Available()) {
+				throw new UnsupportedOperationException(
+						"To enable HTTP/3 support, you must add the dependency `io.netty.incubator:netty-incubator-codec-http3`" +
+								" to the class path first");
+			}
+
+			Supplier<? extends SocketAddress> bindAddressSupplier = config.bindAddress();
+			if ((bindAddressSupplier == null || bindAddressSupplier.get() == null)) {
+				config.bindAddress(() -> new InetSocketAddress(0));
+			}
+		}
+
 		boolean isH2c = config.checkProtocol(HttpClientConfig.h2c);
 		if ((!isH2c || config._protocols > 1) && HttpClientSecure.hasDefaultSslProvider(config)) {
-			dup.configuration().sslProvider = HttpClientSecure.defaultSslProvider(config);
+			config.sslProvider = HttpClientSecure.defaultSslProvider(config);
 		}
 		return dup;
 	}
@@ -1602,13 +1655,16 @@ public abstract class HttpClient extends ClientTransport<HttpClient, HttpClientC
 	}
 
 	static boolean isCompressing(HttpHeaders h) {
-		return h.contains(HttpHeaderNames.ACCEPT_ENCODING, HttpHeaderValues.GZIP, true);
+		return h.contains(HttpHeaderNames.ACCEPT_ENCODING, HttpHeaderValues.GZIP, true)
+				|| h.contains(HttpHeaderNames.ACCEPT_ENCODING, HttpHeaderValues.BR, true);
 	}
 
 	static String reactorNettyVersion() {
-		return Optional.ofNullable(HttpClient.class.getPackage()
-		                                           .getImplementationVersion())
-		               .orElse("dev");
+		Package pac = HttpClient.class.getPackage();
+		if (pac == null) {
+			return "dev";
+		}
+		return Optional.ofNullable(pac.getImplementationVersion()).orElse("dev");
 	}
 
 	static final Logger log = Loggers.getLogger(HttpClient.class);
