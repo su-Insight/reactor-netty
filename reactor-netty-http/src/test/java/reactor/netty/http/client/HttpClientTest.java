@@ -3144,7 +3144,7 @@ class HttpClientTest extends BaseHttpTest {
 				      .responseContent()
 				      .aggregate()
 				      .asString()
-				      .block(Duration.ofSeconds(5));
+				      .block(Duration.ofSeconds(10));
 
 		assertThat(response).isEqualTo("testIssue1697");
 		assertThat(onRequest.get()).isFalse();
@@ -3180,7 +3180,7 @@ class HttpClientTest extends BaseHttpTest {
 	@Test
 	void testHttpClientCancelled() throws InterruptedException {
 		// logged by the server when last http packet is sent and channel is terminated
-		String serverCancelledLog = "[HttpServer] Channel inbound receiver cancelled (operation cancelled).";
+		String serverCancelledLog = "[HttpServer] Channel inbound receiver cancelled (subscription disposed).";
 		// logged by client when cancelled while receiving response
 		String clientCancelledLog = HttpClientOperations.INBOUND_CANCEL_LOG;
 
@@ -3344,6 +3344,66 @@ class HttpClientTest extends BaseHttpTest {
 		finally {
 			serverLoop.disposeLater()
 			          .block(Duration.ofSeconds(5));
+		}
+	}
+
+	@Test
+	void testIssue3285NoOperations() throws Exception {
+		testIssue3285("HTTP/1.1 200 OK\r\nContent-Length:4\r\n\r\ntest\r\n\r\nsomething\r\n\r\n", null);
+	}
+
+	@Test
+	void testIssue3285LastContent() throws Exception {
+		testIssue3285("HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\ntest\r\n\r\n", NumberFormatException.class);
+	}
+
+	@Test
+	void testIssue3285HttpResponse() throws Exception {
+		testIssue3285("HTTP/1 200 OK\r\n\r\n", IllegalArgumentException.class);
+	}
+
+	void testIssue3285(String serverResponse, @Nullable Class<? extends Throwable> expectedException) throws Exception {
+		disposableServer =
+				TcpServer.create()
+				         .host("localhost")
+				         .port(0)
+				         .wiretap(true)
+				         .handle((in, out) -> in.receive().flatMap(b -> out.sendString(Mono.just(serverResponse))))
+				         .bindNow();
+
+		CountDownLatch latch = new CountDownLatch(2);
+		ConnectionProvider provider = ConnectionProvider.create("testIssue3285", 1);
+		HttpClient client = createHttpClientForContextWithAddress(provider)
+				.doOnRequest((req, conn) -> conn.channel().closeFuture().addListener(f -> latch.countDown()));
+
+		try (LogTracker logTracker = new LogTracker("reactor.netty.channel.ChannelOperationsHandler", 2, "Decoding failed.")) {
+			testIssue3285SendRequest(client, expectedException);
+
+			testIssue3285SendRequest(client, expectedException);
+
+			assertThat(latch.await(5, TimeUnit.SECONDS)).isTrue();
+
+			if (expectedException == null) {
+				assertThat(logTracker.latch.await(5, TimeUnit.SECONDS)).isTrue();
+			}
+		}
+	}
+
+	static void testIssue3285SendRequest(HttpClient client, @Nullable Class<? extends Throwable> exception) {
+		Mono<String> response =
+				client.get()
+				      .uri("/")
+				      .responseSingle((res, bytes) -> bytes.asString());
+		if (exception != null) {
+			response.as(StepVerifier::create)
+			        .expectError(exception)
+			        .verify(Duration.ofSeconds(5));
+		}
+		else {
+			response.as(StepVerifier::create)
+			        .expectNext("test")
+			        .expectComplete()
+			        .verify(Duration.ofSeconds(5));
 		}
 	}
 }

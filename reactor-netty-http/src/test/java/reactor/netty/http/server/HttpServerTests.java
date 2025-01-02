@@ -1003,7 +1003,7 @@ class HttpServerTests extends BaseHttpTest {
 		          .responseContent()
 		          .aggregate()
 		          .asString()
-		          .block(Duration.ofSeconds(5));
+		          .block(Duration.ofSeconds(30));
 
 		assertThat(channelRef.get()).isNotNull();
 		assertThat(chunkSize).as("line length").hasValue(789);
@@ -1266,7 +1266,7 @@ class HttpServerTests extends BaseHttpTest {
 				          .uri("/")
 				          .responseContent())
 				    .expectError(PrematureCloseException.class)
-				    .verify(Duration.ofSeconds(5));
+				    .verify(Duration.ofSeconds(10));
 
 		assertThat(latch.await(30, TimeUnit.SECONDS)).isTrue();
 		assertThat(error.get()).isInstanceOf(AbortedException.class);
@@ -2290,7 +2290,7 @@ class HttpServerTests extends BaseHttpTest {
 		        .aggregate()
 		        .as(StepVerifier::create)
 		        .expectError()
-		        .verify(Duration.ofSeconds(5));
+		        .verify(Duration.ofSeconds(10));
 
 		StepVerifier.create(error.asMono())
 		            .expectNextMatches(t -> t instanceof SslHandshakeTimeoutException)

@@ -624,14 +624,24 @@ final class Http2Pool implements InstrumentedPool<Connection>, InstrumentedPool.
 	 * @param borrower a new {@link Borrower} to add to the queue and later either serve or consider pending
 	 */
 	void pendingOffer(Borrower borrower) {
-		int maxPending = poolConfig.maxPending();
 		ConcurrentLinkedDeque<Borrower> pendingQueue = pending;
 		if (pendingQueue == TERMINATED) {
 			return;
 		}
+
 		int postOffer = addPending(pendingQueue, borrower, false);
 
+		long estimateStreamsCount = totalMaxConcurrentStreams - acquired;
+		int permits = poolConfig.allocationStrategy().estimatePermitCount();
+		if (permits + estimateStreamsCount < postOffer) {
+			borrower.pendingAcquireStart = clock.millis();
+			if (!borrower.acquireTimeout.isZero()) {
+				borrower.timeoutTask = poolConfig.pendingAcquireTimer().apply(borrower, borrower.acquireTimeout);
+			}
+		}
+
 		if (WIP.getAndIncrement(this) == 0) {
+			int maxPending = poolConfig.maxPending();
 			ConcurrentLinkedQueue<Slot> ir = connections;
 			if (maxPending >= 0 && postOffer > maxPending && ir.isEmpty() && poolConfig.allocationStrategy().estimatePermitCount() == 0) {
 				Borrower toCull = pollPending(pendingQueue, false);
@@ -757,13 +767,6 @@ final class Http2Pool implements InstrumentedPool<Connection>, InstrumentedPool.
 		@Override
 		public void request(long n) {
 			if (Operators.validate(n)) {
-				long estimateStreamsCount = pool.totalMaxConcurrentStreams - pool.acquired;
-				int permits = pool.poolConfig.allocationStrategy().estimatePermitCount();
-				int pending = pool.pendingSize;
-				if (!acquireTimeout.isZero() && permits + estimateStreamsCount <= pending) {
-					pendingAcquireStart = pool.clock.millis();
-					timeoutTask = pool.poolConfig.pendingAcquireTimer().apply(this, acquireTimeout);
-				}
 				pool.doAcquire(this);
 			}
 		}
@@ -822,13 +825,15 @@ final class Http2Pool implements InstrumentedPool<Connection>, InstrumentedPool.
 		}
 
 		void stopPendingCountdown(boolean success) {
-			if (!timeoutTask.isDisposed()) {
+			if (pendingAcquireStart > 0) {
 				if (success) {
 					pool.poolConfig.metricsRecorder().recordPendingSuccessAndLatency(pool.clock.millis() - pendingAcquireStart);
 				}
 				else {
 					pool.poolConfig.metricsRecorder().recordPendingFailureAndLatency(pool.clock.millis() - pendingAcquireStart);
 				}
+
+				pendingAcquireStart = 0;
 			}
 			timeoutTask.dispose();
 		}
