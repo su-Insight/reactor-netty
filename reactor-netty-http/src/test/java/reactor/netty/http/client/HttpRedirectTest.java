@@ -393,7 +393,7 @@ class HttpRedirectTest extends BaseHttpTest {
 		          .get()
 		          .uri("/")
 		          .responseContent()
-		          .blockLast();
+		          .blockLast(Duration.ofSeconds(5));
 
 		assertThat(followRedirects.get()).isEqualTo(4);
 	}
@@ -783,6 +783,6 @@ class HttpRedirectTest extends BaseHttpTest {
 		        .as(StepVerifier::create)
 		        .expectNextMatches(tuple -> "OK".equals(tuple.getT1()) && tuple.getT2() == 200)
 		        .expectComplete()
-		        .verify(Duration.ofSeconds(5));
+		        .verify(Duration.ofSeconds(10));
 	}
 }

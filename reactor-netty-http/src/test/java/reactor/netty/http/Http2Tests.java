@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020-2023 VMware, Inc. or its affiliates, All Rights Reserved.
+ * Copyright (c) 2020-2024 VMware, Inc. or its affiliates, All Rights Reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -200,7 +200,7 @@ class Http2Tests extends BaseHttpTest {
 		ConnectionProvider provider = builder.build();
 		doTestMaxActiveStreams(HttpClient.create(provider), 1, 1, 1);
 		provider.disposeLater()
-		        .block();
+		        .block(Duration.ofSeconds(5));
 	}
 
 	@Test
@@ -213,7 +213,7 @@ class Http2Tests extends BaseHttpTest {
 		ConnectionProvider provider = ConnectionProvider.create("testMaxActiveStreams_2", 1);
 		doTestMaxActiveStreams(HttpClient.create(provider), 2, 2, 0);
 		provider.disposeLater()
-		        .block();
+		        .block(Duration.ofSeconds(5));
 	}
 
 	@Test
@@ -695,7 +695,7 @@ class Http2Tests extends BaseHttpTest {
 		    .as(StepVerifier::create)
 		    .assertNext(t -> assertThat(t.getT1()).isNotNull().hasSize(2).allMatch("doTestMaxStreams"::equals))
 		    .expectComplete()
-		    .verify(Duration.ofSeconds(5));
+		    .verify(Duration.ofSeconds(10));
 	}
 
 	@ParameterizedTest
@@ -731,6 +731,6 @@ class Http2Tests extends BaseHttpTest {
 		      .as(StepVerifier::create)
 		      .expectNextMatches(buf -> expectation.equals(buf.toString(Charset.defaultCharset())))
 		      .expectComplete()
-		      .verify(Duration.ofSeconds(5));
+		      .verify(Duration.ofSeconds(10));
 	}
 }

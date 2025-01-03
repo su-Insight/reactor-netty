@@ -23,7 +23,7 @@ buildscript {
 		maven { url "https://repo.spring.io/plugins-release" }
 	}
 	dependencies {
-		classpath 'org.jfrog.buildinfo:build-info-extractor-gradle:4.33.13' //applied in individual submodules
+		classpath 'org.jfrog.buildinfo:build-info-extractor-gradle:4.33.20' //applied in individual submodules
 	}
 }
 
@@ -32,16 +32,17 @@ plugins {
 	id 'org.asciidoctor.jvm.convert' version '3.3.2' apply false
 	id 'org.asciidoctor.jvm.pdf' version '3.3.2' apply false
 	id 'com.google.osdetector' version '1.7.3'
-	id 'org.gradle.test-retry' version '1.5.8'
+	id 'org.gradle.test-retry' version '1.5.10'
 	id 'io.spring.nohttp' version '0.0.11'
-	id 'com.github.johnrengelman.shadow' version '7.1.2' apply false
+	id 'com.github.johnrengelman.shadow' version '8.1.1' apply false
 	//we now need version of Artifactory gradle plugin deployed on Maven Central, see above
-	id 'me.champeau.gradle.japicmp' version '0.4.2' apply false
+	id 'me.champeau.gradle.japicmp' version '0.4.3' apply false
 	id 'de.undercouch.download' version '5.6.0' apply false
 	id 'io.spring.javadoc' version '0.0.1' apply false
 	id 'io.spring.javadoc-aggregate' version '0.0.1' apply false
 	id 'biz.aQute.bnd.builder' version '6.4.0' apply false
 	id 'org.graalvm.buildtools.native' version '0.9.25' apply false
+	id 'net.ltgt.errorprone' version '4.0.1' apply false
 }
 
 description = 'Reactive Streams Netty driver'
@@ -99,7 +100,7 @@ ext {
 	}
 
 	braveVersion = '5.18.1'
-	zipkinSenderVersion = '2.16.3'
+	zipkinSenderVersion = '2.17.2'
 
 	jsr305Version = '3.0.2'
 
@@ -108,7 +109,7 @@ ext {
 	logbackVersion = '1.2.13'
 
 	// Netty
-	nettyDefaultVersion = '4.1.108.Final'
+	nettyDefaultVersion = '4.1.111.Final'
 	if (!project.hasProperty("forceNettyVersion")) {
 		nettyVersion = nettyDefaultVersion
 	}
@@ -117,22 +118,24 @@ ext {
 		println "Netty version defined from command line: ${forceNettyVersion}"
 	}
 	nettyIoUringVersion = '0.0.25.Final'
-	nettyQuicVersion = '0.0.60.Final'
+	nettyQuicVersion = '0.0.65.Final'
 
 	// Testing
 	brotli4jVersion = '1.16.0'
-	jacksonDatabindVersion = '2.17.0'
+	jacksonDatabindVersion = '2.17.2'
 	testAddonVersion = reactorCoreVersion
-	assertJVersion = '3.25.3'
+	assertJVersion = '3.26.3'
 	awaitilityVersion = '4.2.1'
-	hoverflyJavaVersion = '0.17.0'
-	tomcatVersion = '9.0.87'
+	hoverflyJavaVersion = '0.19.0'
+	tomcatVersion = '9.0.91'
 	boringSslVersion = '2.0.65.Final'
-	junitVersion = '5.10.2'
-	junitPlatformLauncherVersion = '1.10.2'
+	junitVersion = '5.10.3'
+	junitPlatformLauncherVersion = '1.10.3'
 	mockitoVersion = '4.11.0'
-	blockHoundVersion = '1.0.8.RELEASE'
+	blockHoundVersion = '1.0.9.RELEASE'
 	reflectionsVersion = '0.10.2'
+	errorproneCoreVersion = '2.10.0'
+	errorproneGuavaVersion = '30.0-jre'
 
 	javadocLinks = ["https://docs.oracle.com/javase/8/docs/api/",
 					// Use Reactive Streams 1.0.3 version for javadoc generation
