@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011-2022 VMware, Inc. or its affiliates, All Rights Reserved.
+ * Copyright (c) 2011-2024 VMware, Inc. or its affiliates, All Rights Reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,6 +17,7 @@ package reactor.netty.http.client;
 
 import java.net.URI;
 import java.nio.charset.Charset;
+import java.security.cert.CertificateException;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
@@ -29,6 +30,7 @@ import java.util.function.BiFunction;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.Predicate;
+import java.util.stream.Stream;
 
 import io.netty.buffer.Unpooled;
 import io.netty.channel.embedded.EmbeddedChannel;
@@ -45,7 +47,14 @@ import io.netty.handler.codec.http.websocketx.WebSocketClientHandshakeException;
 import io.netty.handler.codec.http.websocketx.WebSocketCloseStatus;
 import io.netty.handler.codec.http.websocketx.WebSocketFrame;
 import io.netty.handler.codec.http.websocketx.WebSocketHandshakeException;
+import io.netty.handler.ssl.util.InsecureTrustManagerFactory;
+import io.netty.handler.ssl.util.SelfSignedCertificate;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.Named;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.reactivestreams.Publisher;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -55,11 +64,16 @@ import reactor.netty.BaseHttpTest;
 import reactor.netty.Connection;
 import reactor.netty.ConnectionObserver;
 import reactor.netty.channel.AbortedException;
+import reactor.netty.http.Http11SslContextSpec;
+import reactor.netty.http.Http2SslContextSpec;
+import reactor.netty.http.HttpProtocol;
 import reactor.netty.http.logging.ReactorNettyHttpMessageLogFactory;
+import reactor.netty.http.server.HttpServer;
 import reactor.netty.http.server.WebsocketServerSpec;
 import reactor.netty.http.websocket.WebsocketInbound;
 import reactor.netty.http.websocket.WebsocketOutbound;
 import reactor.netty.resources.ConnectionProvider;
+import reactor.netty.tcp.SslProvider;
 import reactor.test.StepVerifier;
 import reactor.util.Logger;
 import reactor.util.Loggers;
@@ -70,6 +84,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatExceptionOfType;
 
 /**
+ * This test class verifies {@link HttpClient} websocket functionality.
+ *
  * @author tjreactive
  * @author smaldini
  */
@@ -78,6 +94,23 @@ class WebsocketTest extends BaseHttpTest {
 	static final String auth = "bearer abc";
 
 	static final Logger log = Loggers.getLogger(WebsocketTest.class);
+
+	static SelfSignedCertificate ssc;
+	static Http11SslContextSpec serverCtx11;
+	static Http2SslContextSpec serverCtx2;
+	static Http11SslContextSpec clientCtx11;
+	static Http2SslContextSpec clientCtx2;
+
+	@BeforeAll
+	static void createSelfSignedCertificate() throws CertificateException {
+		ssc = new SelfSignedCertificate();
+		serverCtx11 = Http11SslContextSpec.forServer(ssc.certificate(), ssc.privateKey());
+		serverCtx2 = Http2SslContextSpec.forServer(ssc.certificate(), ssc.privateKey());
+		clientCtx11 = Http11SslContextSpec.forClient()
+		                                  .configure(builder -> builder.trustManager(InsecureTrustManagerFactory.INSTANCE));
+		clientCtx2 = Http2SslContextSpec.forClient()
+		                                .configure(builder -> builder.trustManager(InsecureTrustManagerFactory.INSTANCE));
+	}
 
 	@Test
 	void simpleTest() {
@@ -93,7 +126,7 @@ class WebsocketTest extends BaseHttpTest {
 				          .handle((i, o) -> i.receive().asString())
 				          .log("client")
 				          .collectList()
-				          .block();
+				          .block(Duration.ofSeconds(5));
 
 		assertThat(res).isNotNull();
 		assertThat(res.get(0)).isEqualTo("test");
@@ -154,7 +187,7 @@ class WebsocketTest extends BaseHttpTest {
 		                      .log())
 		            .expectNextSequence(expected)
 		            .expectComplete()
-		            .verify();
+		            .verify(Duration.ofSeconds(5));
 	}
 
 	@Test
@@ -207,7 +240,7 @@ class WebsocketTest extends BaseHttpTest {
 		StepVerifier.create(response)
 		            .expectNextMatches(list -> "1000 World!".equals(list.get(999)))
 		            .expectComplete()
-		            .verify();
+		            .verify(Duration.ofSeconds(5));
 
 		log.debug("FINISHED: server[" + serverRes.get() + "] / client[" + clientRes + "]");
 	}
@@ -241,7 +274,7 @@ class WebsocketTest extends BaseHttpTest {
 		                      .log())
 		            .expectNextSequence(expected)
 		            .expectComplete()
-		            .verify();
+		            .verify(Duration.ofSeconds(5));
 	}
 
 	@Test
@@ -554,7 +587,7 @@ class WebsocketTest extends BaseHttpTest {
 				                      .log()))
 		            .expectNextSequence(expected)
 		            .expectComplete()
-		            .verify();
+		            .verify(Duration.ofSeconds(5));
 
 		pr.dispose();
 	}
@@ -920,7 +953,7 @@ class WebsocketTest extends BaseHttpTest {
 				          .get()
 				          .uri("/ws")
 				          .response()
-				          .block();
+				          .block(Duration.ofSeconds(5));
 		assertThat(res).isNotNull();
 		assertThat(res.status()).isEqualTo(HttpResponseStatus.SWITCHING_PROTOCOLS);
 	}
@@ -953,7 +986,7 @@ class WebsocketTest extends BaseHttpTest {
 				          .uri("/ws")
 				          .receive()
 				          .asString()
-				          .blockLast();
+				          .blockLast(Duration.ofSeconds(5));
 
 		assertThat(res).isNotNull()
 		               .isEqualTo("test");
@@ -1430,5 +1463,50 @@ class WebsocketTest extends BaseHttpTest {
 		                .subscribe(null, errorConsumer, null);
 
 		assertThat(latch.await(5, TimeUnit.SECONDS)).as("latch await").isTrue();
+	}
+
+	@ParameterizedTest
+	@MethodSource("http11CompatibleProtocols")
+	public void testIssue3036(HttpProtocol[] serverProtocols, HttpProtocol[] clientProtocols,
+			@Nullable SslProvider.ProtocolSslContextSpec serverCtx, @Nullable SslProvider.ProtocolSslContextSpec clientCtx) {
+		WebsocketServerSpec websocketServerSpec = WebsocketServerSpec.builder().compress(true).build();
+
+		HttpServer httpServer = createServer().protocol(serverProtocols);
+		if (serverCtx != null) {
+			httpServer = httpServer.secure(spec -> spec.sslContext(serverCtx));
+		}
+
+		disposableServer =
+				httpServer.handle((req, res) -> res.sendWebsocket((in, out) -> out.sendString(Mono.just("test")), websocketServerSpec))
+				          .bindNow();
+
+		WebsocketClientSpec webSocketClientSpec = WebsocketClientSpec.builder().compress(true).build();
+
+		HttpClient httpClient = createClient(disposableServer::address).protocol(clientProtocols);
+		if (clientCtx != null) {
+			httpClient = httpClient.secure(spec -> spec.sslContext(clientCtx));
+		}
+
+		AtomicReference<List<String>> responseHeaders = new AtomicReference<>(new ArrayList<>());
+		httpClient.websocket(webSocketClientSpec)
+		          .handle((in, out) -> {
+		              responseHeaders.set(in.headers().getAll(HttpHeaderNames.SEC_WEBSOCKET_EXTENSIONS));
+		              return out.sendClose();
+		          })
+		          .then()
+		          .block(Duration.ofSeconds(5));
+
+		assertThat(responseHeaders.get()).contains("permessage-deflate");
+	}
+
+	static Stream<Arguments> http11CompatibleProtocols() {
+		return Stream.of(
+				Arguments.of(new HttpProtocol[]{HttpProtocol.HTTP11}, new HttpProtocol[]{HttpProtocol.HTTP11}, null, null),
+				Arguments.of(new HttpProtocol[]{HttpProtocol.HTTP11}, new HttpProtocol[]{HttpProtocol.HTTP11},
+						Named.of("Http11SslContextSpec", serverCtx11), Named.of("Http11SslContextSpec", clientCtx11)),
+				Arguments.of(new HttpProtocol[]{HttpProtocol.H2, HttpProtocol.HTTP11}, new HttpProtocol[]{HttpProtocol.HTTP11},
+						Named.of("Http2SslContextSpec", serverCtx2), Named.of("Http11SslContextSpec", clientCtx11)),
+				Arguments.of(new HttpProtocol[]{HttpProtocol.H2C, HttpProtocol.HTTP11}, new HttpProtocol[]{HttpProtocol.HTTP11}, null, null)
+		);
 	}
 }

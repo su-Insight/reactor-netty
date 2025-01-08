@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011-2022 VMware, Inc. or its affiliates, All Rights Reserved.
+ * Copyright (c) 2011-2024 VMware, Inc. or its affiliates, All Rights Reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -109,12 +109,12 @@ public abstract class HttpClient extends ClientTransport<HttpClient, HttpClientC
 	public static final String USER_AGENT = String.format("ReactorNetty/%s", reactorNettyVersion());
 
 	/**
-	 * A URI configuration
+	 * A URI configuration.
 	 */
 	public interface UriConfiguration<S extends UriConfiguration<?>> {
 
 		/**
-		 * Configure URI to use for this request/response
+		 * Configure URI to use for this request/response.
 		 *
 		 * @param uri target URI, if starting with "/" it will be prepended with
 		 * {@link #baseUrl(String)} when available
@@ -124,7 +124,7 @@ public abstract class HttpClient extends ClientTransport<HttpClient, HttpClientC
 		S uri(String uri);
 
 		/**
-		 * Configure URI to use for this request/response on subscribe
+		 * Configure URI to use for this request/response on subscribe.
 		 *
 		 * @param uri target URI, if starting with "/" it will be prepended with
 		 * {@link #baseUrl(String)} when available
@@ -575,7 +575,7 @@ public abstract class HttpClient extends ClientTransport<HttpClient, HttpClientC
 	/**
 	 * Configure the
 	 * {@link ClientCookieEncoder}, {@link ClientCookieDecoder} will be
-	 * chosen based on the encoder
+	 * chosen based on the encoder.
 	 *
 	 * @param encoder the preferred ClientCookieEncoder
 	 *
@@ -590,7 +590,7 @@ public abstract class HttpClient extends ClientTransport<HttpClient, HttpClientC
 
 	/**
 	 * Configure the
-	 * {@link ClientCookieEncoder} and {@link ClientCookieDecoder}
+	 * {@link ClientCookieEncoder} and {@link ClientCookieDecoder}.
 	 *
 	 * @param encoder the preferred ClientCookieEncoder
 	 * @param decoder the preferred ClientCookieDecoder
@@ -1060,7 +1060,7 @@ public abstract class HttpClient extends ClientTransport<HttpClient, HttpClientC
 	}
 
 	/**
-	 * Apply HTTP/2 configuration
+	 * Apply HTTP/2 configuration.
 	 *
 	 * @param http2Settings configures {@link Http2SettingsSpec} before requesting
 	 * @return a new {@link HttpClient}
@@ -1247,7 +1247,7 @@ public abstract class HttpClient extends ClientTransport<HttpClient, HttpClientC
 	}
 
 	/**
-	 * Removes any previously applied SSL configuration customization
+	 * Removes any previously applied SSL configuration customization.
 	 *
 	 * @return a new {@link HttpClient}
 	 */
@@ -1283,6 +1283,14 @@ public abstract class HttpClient extends ClientTransport<HttpClient, HttpClientC
 		return request(HttpMethod.PATCH);
 	}
 
+	/**
+	 * The port to which this client should connect.
+	 * If a port is not specified, the default port {@code 80} is used.
+	 * <p><strong>Note:</strong> The port can be specified also with {@code PORT} environment variable.
+	 *
+	 * @param port the port to connect to
+	 * @return a new {@link HttpClient}
+	 */
 	@Override
 	public final HttpClient port(int port) {
 		return super.port(port);
@@ -1588,9 +1596,11 @@ public abstract class HttpClient extends ClientTransport<HttpClient, HttpClientC
 	}
 
 	static String reactorNettyVersion() {
-		return Optional.ofNullable(HttpClient.class.getPackage()
-		                                           .getImplementationVersion())
-		               .orElse("dev");
+		Package pac = HttpClient.class.getPackage();
+		if (pac == null) {
+			return "dev";
+		}
+		return Optional.ofNullable(pac.getImplementationVersion()).orElse("dev");
 	}
 
 	static final Logger log = Loggers.getLogger(HttpClient.class);

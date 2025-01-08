@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011-2023 VMware, Inc. or its affiliates, All Rights Reserved.
+ * Copyright (c) 2011-2024 VMware, Inc. or its affiliates, All Rights Reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -20,7 +20,9 @@ import java.net.URI;
 import java.net.URISyntaxException;
 import java.nio.channels.ClosedChannelException;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.Collections;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
@@ -93,6 +95,8 @@ import reactor.util.context.ContextView;
 import static reactor.netty.ReactorNetty.format;
 
 /**
+ * Conversion between Netty types and Reactor types ({@link HttpOperations}.
+ *
  * @author Stephane Maldini
  * @author Simon Baslé
  */
@@ -104,6 +108,7 @@ class HttpClientOperations extends HttpOperations<NettyInbound, NettyOutbound>
 	final HttpHeaders            requestHeaders;
 	final ClientCookieEncoder    cookieEncoder;
 	final ClientCookieDecoder    cookieDecoder;
+	final List<Cookie>           cookieList;
 	final Sinks.One<HttpHeaders> trailerHeaders;
 
 	Supplier<String>[]          redirectedFrom = EMPTY_REDIRECTIONS;
@@ -142,6 +147,7 @@ class HttpClientOperations extends HttpOperations<NettyInbound, NettyOutbound>
 		this.requestHeaders = replaced.requestHeaders;
 		this.cookieEncoder = replaced.cookieEncoder;
 		this.cookieDecoder = replaced.cookieDecoder;
+		this.cookieList = replaced.cookieList;
 		this.resourceUrl = replaced.resourceUrl;
 		this.path = replaced.path;
 		this.responseTimeout = replaced.responseTimeout;
@@ -163,14 +169,14 @@ class HttpClientOperations extends HttpOperations<NettyInbound, NettyOutbound>
 		this.requestHeaders = nettyRequest.headers();
 		this.cookieDecoder = decoder;
 		this.cookieEncoder = encoder;
+		this.cookieList = new ArrayList<>();
 		this.trailerHeaders = Sinks.unsafe().one();
 	}
 
 	@Override
 	public HttpClientRequest addCookie(Cookie cookie) {
 		if (!hasSentHeaders()) {
-			this.requestHeaders.add(HttpHeaderNames.COOKIE,
-					cookieEncoder.encode(cookie));
+			this.cookieList.add(cookie);
 		}
 		else {
 			throw new IllegalStateException("Status and headers already sent");
@@ -594,6 +600,10 @@ class HttpClientOperations extends HttpOperations<NettyInbound, NettyOutbound>
 				previousRequestHeaders = null;
 			}
 		}
+
+		if (!cookieList.isEmpty()) {
+			requestHeaders.add(HttpHeaderNames.COOKIE, cookieEncoder.encode(cookieList));
+		}
 	}
 
 	@Override
@@ -629,8 +639,19 @@ class HttpClientOperations extends HttpOperations<NettyInbound, NettyOutbound>
 		}
 		listener().onStateChange(this, HttpClientState.REQUEST_SENT);
 		if (responseTimeout != null) {
-			addHandlerFirst(NettyPipeline.ResponseTimeoutHandler,
-					new ReadTimeoutHandler(responseTimeout.toMillis(), TimeUnit.MILLISECONDS));
+			if (channel().pipeline().get(NettyPipeline.HttpMetricsHandler) != null) {
+				if (channel().pipeline().get(NettyPipeline.ResponseTimeoutHandler) == null) {
+					channel().pipeline().addBefore(NettyPipeline.HttpMetricsHandler, NettyPipeline.ResponseTimeoutHandler,
+							new ReadTimeoutHandler(responseTimeout.toMillis(), TimeUnit.MILLISECONDS));
+					if (isPersistent()) {
+						onTerminate().subscribe(null, null, () -> removeHandler(NettyPipeline.ResponseTimeoutHandler));
+					}
+				}
+			}
+			else {
+				addHandlerFirst(NettyPipeline.ResponseTimeoutHandler,
+						new ReadTimeoutHandler(responseTimeout.toMillis(), TimeUnit.MILLISECONDS));
+			}
 		}
 		channel().read();
 		if (channel().parent() != null) {
@@ -658,11 +679,10 @@ class HttpClientOperations extends HttpOperations<NettyInbound, NettyOutbound>
 	protected void onInboundNext(ChannelHandlerContext ctx, Object msg) {
 		if (msg instanceof HttpResponse) {
 			HttpResponse response = (HttpResponse) msg;
-			if (response.decoderResult()
-			            .isFailure()) {
-				onInboundError(response.decoderResult()
-				                       .cause());
+			if (response.decoderResult().isFailure()) {
+				onInboundError(response.decoderResult().cause());
 				ReferenceCountUtil.release(msg);
+				terminate();
 				return;
 			}
 			if (HttpResponseStatus.CONTINUE.equals(response.status())) {
@@ -725,8 +745,16 @@ class HttpClientOperations extends HttpOperations<NettyInbound, NettyOutbound>
 		}
 
 		if (msg instanceof LastHttpContent) {
+			LastHttpContent lastHttpContent = (LastHttpContent) msg;
+			if (lastHttpContent.decoderResult().isFailure()) {
+				onInboundError(lastHttpContent.decoderResult().cause());
+				lastHttpContent.release();
+				terminate();
+				return;
+			}
+
 			if (is100Continue) {
-				ReferenceCountUtil.release(msg);
+				lastHttpContent.release();
 				channel().read();
 				return;
 			}
@@ -735,18 +763,20 @@ class HttpClientOperations extends HttpOperations<NettyInbound, NettyOutbound>
 					log.debug(format(channel(), "HttpClientOperations received an incorrect end " +
 							"delimiter (previously used connection?)"));
 				}
-				ReferenceCountUtil.release(msg);
+				lastHttpContent.release();
 				return;
 			}
 			if (log.isDebugEnabled()) {
 				log.debug(format(channel(), "Received last HTTP packet"));
 			}
-			if (msg != LastHttpContent.EMPTY_LAST_CONTENT) {
-				if (redirecting != null) {
-					ReferenceCountUtil.release(msg);
+			if (lastHttpContent != LastHttpContent.EMPTY_LAST_CONTENT) {
+				// When there is HTTP/2 response with INBOUND HEADERS(endStream=false) followed by INBOUND DATA(endStream=true length=0),
+				// Netty sends LastHttpContent with empty buffer instead of EMPTY_LAST_CONTENT
+				if (redirecting != null || lastHttpContent.content().readableBytes() == 0) {
+					lastHttpContent.release();
 				}
 				else {
-					super.onInboundNext(ctx, msg);
+					super.onInboundNext(ctx, lastHttpContent);
 				}
 			}
 
@@ -755,7 +785,7 @@ class HttpClientOperations extends HttpOperations<NettyInbound, NettyOutbound>
 				// Whether there are subscribers or the subscriber cancels is not of interest
 				// Evaluated EmitResult: FAIL_TERMINATED, FAIL_OVERFLOW, FAIL_CANCELLED, FAIL_NON_SERIALIZED
 				// FAIL_ZERO_SUBSCRIBER
-				trailerHeaders.tryEmitValue(((LastHttpContent) msg).trailingHeaders());
+				trailerHeaders.tryEmitValue(lastHttpContent.trailingHeaders());
 			}
 
 			//force auto read to enable more accurate close selection now inbound is done

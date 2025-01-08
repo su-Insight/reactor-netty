@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021-2023 VMware, Inc. or its affiliates, All Rights Reserved.
+ * Copyright (c) 2021-2024 VMware, Inc. or its affiliates, All Rights Reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -36,12 +36,16 @@ import java.util.function.Function;
 import static reactor.netty.ReactorNetty.format;
 
 /**
+ * {@link ChannelDuplexHandler} for handling {@link HttpClient} metrics.
+ *
  * @author Violeta Georgieva
  * @since 1.0.8
  */
 abstract class AbstractHttpClientMetricsHandler extends ChannelDuplexHandler {
 
 	private static final Logger log = Loggers.getLogger(AbstractHttpClientMetricsHandler.class);
+
+	final SocketAddress remoteAddress;
 
 	String path;
 
@@ -67,7 +71,8 @@ abstract class AbstractHttpClientMetricsHandler extends ChannelDuplexHandler {
 
 	int lastWriteSeq;
 
-	protected AbstractHttpClientMetricsHandler(@Nullable Function<String, String> uriTagValue) {
+	protected AbstractHttpClientMetricsHandler(SocketAddress remoteAddress, @Nullable Function<String, String> uriTagValue) {
+		this.remoteAddress = remoteAddress;
 		this.uriTagValue = uriTagValue;
 	}
 
@@ -79,6 +84,7 @@ abstract class AbstractHttpClientMetricsHandler extends ChannelDuplexHandler {
 		this.dataSentTime = copy.dataSentTime;
 		this.method = copy.method;
 		this.path = copy.path;
+		this.remoteAddress = copy.remoteAddress;
 		this.status = copy.status;
 		this.uriTagValue = copy.uriTagValue;
 		this.lastWriteSeq = copy.lastWriteSeq;
@@ -97,29 +103,28 @@ abstract class AbstractHttpClientMetricsHandler extends ChannelDuplexHandler {
 
 			if (msg instanceof LastHttpContent) {
 				int currentLastWriteSeq = lastWriteSeq;
-				SocketAddress address = ctx.channel().remoteAddress();
 				promise.addListener(future -> {
 					try {
 						// Record write, unless channelRead has already done it (because an early full response has been received)
 						if (currentLastWriteSeq == lastWriteSeq) {
 							lastWriteSeq = (lastWriteSeq + 1) & 0x7F_FF_FF_FF;
-							recordWrite(address);
+							recordWrite(remoteAddress);
 						}
 					}
 					catch (RuntimeException e) {
+						// Allow request-response exchange to continue, unaffected by metrics problem
 						if (log.isWarnEnabled()) {
 							log.warn(format(ctx.channel(), "Exception caught while recording metrics."), e);
 						}
-						// Allow request-response exchange to continue, unaffected by metrics problem
 					}
 				});
 			}
 		}
 		catch (RuntimeException e) {
+			// Allow request-response exchange to continue, unaffected by metrics problem
 			if (log.isWarnEnabled()) {
 				log.warn(format(ctx.channel(), "Exception caught while recording metrics."), e);
 			}
-			// Allow request-response exchange to continue, unaffected by metrics problem
 		}
 		//"FutureReturnValueIgnored" this is deliberate
 		ctx.write(msg, promise);
@@ -138,21 +143,21 @@ abstract class AbstractHttpClientMetricsHandler extends ChannelDuplexHandler {
 
 			if (msg instanceof LastHttpContent) {
 				// Detect if we have received an early response before the request has been fully flushed.
-				// In this case, invoke recordwrite now (because next we will reset all class fields).
+				// In this case, invoke #recordWrite now (because next we will reset all class fields).
 				lastReadSeq = (lastReadSeq + 1) & 0x7F_FF_FF_FF;
 				if ((lastReadSeq > lastWriteSeq) || (lastReadSeq == 0 && lastWriteSeq == Integer.MAX_VALUE)) {
 					lastWriteSeq = (lastWriteSeq + 1) & 0x7F_FF_FF_FF;
-					recordWrite(ctx.channel().remoteAddress());
+					recordWrite(remoteAddress);
 				}
-				recordRead(ctx.channel().remoteAddress());
+				recordRead(remoteAddress);
 				reset();
 			}
 		}
 		catch (RuntimeException e) {
+			// Allow request-response exchange to continue, unaffected by metrics problem
 			if (log.isWarnEnabled()) {
 				log.warn(format(ctx.channel(), "Exception caught while recording metrics."), e);
 			}
-			// Allow request-response exchange to continue, unaffected by metrics problem
 		}
 		ctx.fireChannelRead(msg);
 	}
@@ -163,10 +168,10 @@ abstract class AbstractHttpClientMetricsHandler extends ChannelDuplexHandler {
 			recordException(ctx);
 		}
 		catch (RuntimeException e) {
+			// Allow request-response exchange to continue, unaffected by metrics problem
 			if (log.isWarnEnabled()) {
 				log.warn(format(ctx.channel(), "Exception caught while recording metrics."), e);
 			}
-			// Allow request-response exchange to continue, unaffected by metrics problem
 		}
 		ctx.fireExceptionCaught(cause);
 	}
@@ -197,7 +202,7 @@ abstract class AbstractHttpClientMetricsHandler extends ChannelDuplexHandler {
 	protected abstract HttpClientMetricsRecorder recorder();
 
 	protected void recordException(ChannelHandlerContext ctx) {
-		recorder().incrementErrorsCount(ctx.channel().remoteAddress(),
+		recorder().incrementErrorsCount(remoteAddress,
 				path != null ? path : resolveUri(ctx));
 	}
 
@@ -241,6 +246,6 @@ abstract class AbstractHttpClientMetricsHandler extends ChannelDuplexHandler {
 		dataSent = 0;
 		dataReceivedTime = 0;
 		dataSentTime = 0;
-		// don't reset lastWriteSeq and lastReadSeq, which must be incremented for ever
+		// don't reset lastWriteSeq and lastReadSeq, which must be incremented forever
 	}
 }

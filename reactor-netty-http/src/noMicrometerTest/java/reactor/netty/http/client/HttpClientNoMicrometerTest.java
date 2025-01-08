@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021 VMware, Inc. or its affiliates, All Rights Reserved.
+ * Copyright (c) 2021-2024 VMware, Inc. or its affiliates, All Rights Reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -39,6 +39,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 
 /**
+ * This test class verifies HTTP functionality works without the optional dependency on Micrometer.
+ *
  * @author Simon Baslé
  */
 class HttpClientNoMicrometerTest {
@@ -113,7 +115,7 @@ class HttpClientNoMicrometerTest {
 				      .responseContent()
 				      .aggregate()
 				      .asString()
-				      .block()
+				      .block(Duration.ofSeconds(5))
 		).doesNotThrowAnyException();
 
 		//we still assert that the custom recorder did receive events, since it is not based on micrometer

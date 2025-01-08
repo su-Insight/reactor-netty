@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020-2023 VMware, Inc. or its affiliates, All Rights Reserved.
+ * Copyright (c) 2020-2024 VMware, Inc. or its affiliates, All Rights Reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -141,7 +141,11 @@ dependencies {
 	testRuntimeOnly "org.junit.jupiter:junit-jupiter-engine:$junitVersion"
 	testRuntimeOnly "org.slf4j:jcl-over-slf4j:$slf4jVersion"
 
+	// JSR-305 annotations
+	testFixturesCompileOnly "com.google.code.findbugs:jsr305:$jsr305Version"
 	testFixturesApi("ch.qos.logback:logback-classic:$logbackVersion")
+	testFixturesApi("io.micrometer:micrometer-core:$micrometerVersion")
+	testFixturesApi("org.assertj:assertj-core:$assertJVersion")
 
 	for (dependency in project.configurations.shaded.dependencies) {
 		compileOnly(dependency)
@@ -259,7 +263,9 @@ shadowJar {
 	}
 	bnd(bndOptions)
 
-	archiveClassifier.set(null)
+	enableRelocation true
+	relocationPrefix "reactor.netty.internal.shaded"
+	archiveClassifier.set('')
 
 	dependsOn(project.tasks.jar)
 
@@ -290,13 +296,6 @@ shadowJar {
 
 	exclude 'META-INF/maven*/**'
 }
-
-task relocateShadowJar(type: com.github.jengelman.gradle.plugins.shadow.tasks.ConfigureShadowRelocation) {
-	target = tasks.shadowJar
-	prefix = "reactor.netty.internal.shaded"
-}
-
-tasks.shadowJar.dependsOn(relocateShadowJar)
 
 //delay the maven publishing so that the OSGi metadata is generated
 //then add shadowJar to the publication
