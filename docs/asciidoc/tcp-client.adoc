@@ -49,6 +49,8 @@ include::{examplesdir}/address/Application.java[lines=18..33]
 <2> Configures the `TCP` port
 ====
 
+NOTE: The port can be specified also with *PORT* environment variable.
+
 == Eager Initialization
 
 By default, the initialization of the `TcpClient` resources happens on demand. This means that the `connect
@@ -179,7 +181,7 @@ By default, the `TCP` client is configured with the following options:
 [source,java,indent=0]
 .{sourcedir}/reactor/netty/tcp/TcpClientConnect.java
 ----
-include::{sourcedir}/reactor/netty/tcp/TcpClientConnect.java[lines=36..41]
+include::{sourcedir}/reactor/netty/tcp/TcpClientConnect.java[lines=35..40]
 ----
 ====
 

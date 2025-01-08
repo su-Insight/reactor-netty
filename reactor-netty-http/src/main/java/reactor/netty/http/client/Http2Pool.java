@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021-2022 VMware, Inc. or its affiliates, All Rights Reserved.
+ * Copyright (c) 2021-2024 VMware, Inc. or its affiliates, All Rights Reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -619,6 +619,8 @@ final class Http2Pool implements InstrumentedPool<Connection>, InstrumentedPool.
 	}
 
 	/**
+	 * Adds a new {@link Borrower} to the queue.
+	 *
 	 * @param borrower a new {@link Borrower} to add to the queue and later either serve or consider pending
 	 */
 	void pendingOffer(Borrower borrower) {
@@ -989,7 +991,8 @@ final class Http2Pool implements InstrumentedPool<Connection>, InstrumentedPool.
 		@Nullable
 		ChannelHandlerContext http2FrameCodecCtx() {
 			ChannelHandlerContext ctx = http2FrameCodecCtx;
-			if (ctx != null && !ctx.isRemoved()) {
+			// ChannelHandlerContext.isRemoved is only meant to be called from within the EventLoop
+			if (ctx != null && connection.channel().eventLoop().inEventLoop() && !ctx.isRemoved()) {
 				return ctx;
 			}
 			ctx = connection.channel().pipeline().context(Http2FrameCodec.class);
@@ -1000,7 +1003,8 @@ final class Http2Pool implements InstrumentedPool<Connection>, InstrumentedPool.
 		@Nullable
 		ChannelHandlerContext http2MultiplexHandlerCtx() {
 			ChannelHandlerContext ctx = http2MultiplexHandlerCtx;
-			if (ctx != null && !ctx.isRemoved()) {
+			// ChannelHandlerContext.isRemoved is only meant to be called from within the EventLoop
+			if (ctx != null && connection.channel().eventLoop().inEventLoop() && !ctx.isRemoved()) {
 				return ctx;
 			}
 			ctx = connection.channel().pipeline().context(Http2MultiplexHandler.class);
@@ -1011,7 +1015,8 @@ final class Http2Pool implements InstrumentedPool<Connection>, InstrumentedPool.
 		@Nullable
 		ChannelHandlerContext h2cUpgradeHandlerCtx() {
 			ChannelHandlerContext ctx = h2cUpgradeHandlerCtx;
-			if (ctx != null && !ctx.isRemoved()) {
+			// ChannelHandlerContext.isRemoved is only meant to be called from within the EventLoop
+			if (ctx != null && connection.channel().eventLoop().inEventLoop() && !ctx.isRemoved()) {
 				return ctx;
 			}
 			ctx = connection.channel().pipeline().context(NettyPipeline.H2CUpgradeHandler);

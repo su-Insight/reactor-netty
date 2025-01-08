@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020-2023 VMware, Inc. or its affiliates, All Rights Reserved.
+ * Copyright (c) 2020-2024 VMware, Inc. or its affiliates, All Rights Reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -93,7 +93,7 @@ import static reactor.netty.ConnectionObserver.State.CONNECTED;
 
 /**
  * Test a combination of {@link HttpServer} + {@link HttpProtocol}
- * with a combination of {@link HttpClient} + {@link HttpProtocol}
+ * with a combination of {@link HttpClient} + {@link HttpProtocol}.
  *
  * @author Violeta Georgieva
  * @since 1.0.0
@@ -650,7 +650,8 @@ class HttpProtocolsTests extends BaseHttpTest {
 		                          .asString()
 		                          .timeout(Duration.ofSeconds(10)))
 		            .expectNext("Hello world!")
-		            .verifyComplete();
+		            .expectComplete()
+		            .verify(Duration.ofSeconds(5));
 
 		try {
 			// Wait till all logs are flushed

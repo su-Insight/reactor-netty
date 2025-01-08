@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011-2023 VMware, Inc. or its affiliates, All Rights Reserved.
+ * Copyright (c) 2011-2024 VMware, Inc. or its affiliates, All Rights Reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -111,6 +111,7 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.reactivestreams.Publisher;
@@ -136,6 +137,7 @@ import reactor.netty.http.Http11SslContextSpec;
 import reactor.netty.http.Http2SslContextSpec;
 import reactor.netty.http.HttpProtocol;
 import reactor.netty.http.client.HttpClient;
+import reactor.netty.http.client.HttpClientMetricsRecorder;
 import reactor.netty.http.client.HttpClientRequest;
 import reactor.netty.http.client.PrematureCloseException;
 import reactor.netty.http.logging.ReactorNettyHttpMessageLogFactory;
@@ -165,6 +167,8 @@ import static reactor.netty.http.server.ConnectionInfo.DEFAULT_HTTP_PORT;
 import static reactor.netty.resources.LoopResources.DEFAULT_SHUTDOWN_TIMEOUT;
 
 /**
+ * This test class verifies {@link HttpServer}.
+ *
  * @author Stephane Maldini
  */
 class HttpServerTests extends BaseHttpTest {
@@ -318,7 +322,7 @@ class HttpServerTests extends BaseHttpTest {
 		                              .send(src)
 		                              .responseSingle((res, buf) -> Mono.just(res.status().code())))
 		    .collectList()
-		    .block();
+		    .block(Duration.ofSeconds(5));
 	}
 
 	//from https://github.com/reactor/reactor-netty/issues/90
@@ -350,7 +354,7 @@ class HttpServerTests extends BaseHttpTest {
 			                 .responseContent()
 			                 .aggregate()
 			                 .asString()
-			                 .block();
+			                 .block(Duration.ofSeconds(5));
 
 			// checking the response status, OK
 			assertThat(response).isEqualTo("200");
@@ -372,7 +376,7 @@ class HttpServerTests extends BaseHttpTest {
 			                 .responseContent()
 			                 .aggregate()
 			                 .asString()
-			                 .block();
+			                 .block(Duration.ofSeconds(5));
 
 			assertThat(response).isEqualTo("201");
 		}
@@ -395,7 +399,7 @@ class HttpServerTests extends BaseHttpTest {
 				          .get()
 				          .uri("/return")
 				          .responseSingle((res, buf) -> Mono.just(res.status().code()))
-				          .block();
+				          .block(Duration.ofSeconds(5));
 		assertThat(code).isEqualTo(500);
 	}
 
@@ -588,14 +592,14 @@ class HttpServerTests extends BaseHttpTest {
 				          .get()
 				          .uri("/hello")
 				          .responseSingle((res, buf) -> Mono.just(res.status().code()))
-				          .block();
+				          .block(Duration.ofSeconds(5));
 		assertThat(code).isEqualTo(200);
 
 		code = createClient(disposableServer.port())
 		                 .get()
 		                 .uri("/helloMan")
 		                 .responseSingle((res, buf) -> Mono.just(res.status().code()))
-		                 .block();
+		                 .block(Duration.ofSeconds(5));
 		assertThat(code).isEqualTo(404);
 	}
 
@@ -939,7 +943,7 @@ class HttpServerTests extends BaseHttpTest {
 		StepVerifier.create(status)
 		            .expectNextMatches(HttpResponseStatus.REQUEST_URI_TOO_LONG::equals)
 		            .expectComplete()
-		            .verify();
+		            .verify(Duration.ofSeconds(5));
 	}
 
 	@Test
@@ -961,7 +965,7 @@ class HttpServerTests extends BaseHttpTest {
 		StepVerifier.create(status)
 		            .expectNextMatches(HttpResponseStatus.REQUEST_HEADER_FIELDS_TOO_LARGE::equals)
 		            .expectComplete()
-		            .verify();
+		            .verify(Duration.ofSeconds(5));
 	}
 
 	@Test
@@ -998,7 +1002,7 @@ class HttpServerTests extends BaseHttpTest {
 		          .responseContent()
 		          .aggregate()
 		          .asString()
-		          .block();
+		          .block(Duration.ofSeconds(5));
 
 		assertThat(channelRef.get()).isNotNull();
 		assertThat(chunkSize).as("line length").hasValue(789);
@@ -1044,7 +1048,8 @@ class HttpServerTests extends BaseHttpTest {
 				(req, out) -> {
 					req.addHeader("Connection", "close");
 					return out;
-				});
+				},
+				HttpProtocol.HTTP11);
 		assertThat(latch.await(30, TimeUnit.SECONDS)).isTrue();
 		assertThat(ReferenceCountUtil.refCnt(data)).isEqualTo(0);
 	}
@@ -1059,12 +1064,14 @@ class HttpServerTests extends BaseHttpTest {
 				(req, out) -> {
 					req.addHeader("Connection", "close");
 					return out;
-				});
+				},
+				HttpProtocol.HTTP11);
 		assertThat(ReferenceCountUtil.refCnt(data)).isEqualTo(0);
 	}
 
-	@Test
-	void testDropPublisher_1() throws Exception {
+	@ParameterizedTest
+	@EnumSource(value = HttpProtocol.class, names = {"HTTP11", "H2C"})
+	void testDropPublisher_1(HttpProtocol protocol) throws Exception {
 		CountDownLatch latch = new CountDownLatch(1);
 		ByteBuf data = ByteBufAllocator.DEFAULT.buffer();
 		data.writeCharSequence("test", Charset.defaultCharset());
@@ -1073,7 +1080,8 @@ class HttpServerTests extends BaseHttpTest {
 				                 .send(Flux.defer(() -> Flux.just(data, data.retain(), data.retain()))
 				                           .doFinally(s -> latch.countDown()))
 				                 .then(),
-				(req, out) -> out);
+				(req, out) -> out,
+				protocol);
 		assertThat(latch.await(30, TimeUnit.SECONDS)).isTrue();
 		assertThat(ReferenceCountUtil.refCnt(data)).isEqualTo(0);
 	}
@@ -1086,7 +1094,8 @@ class HttpServerTests extends BaseHttpTest {
 				(req, res) -> res.header("Content-Length", "0")
 				                 .send(Mono.just(data))
 				                 .then(),
-				(req, out) -> out);
+				(req, out) -> out,
+				HttpProtocol.HTTP11);
 		assertThat(ReferenceCountUtil.refCnt(data)).isEqualTo(0);
 	}
 
@@ -1097,23 +1106,27 @@ class HttpServerTests extends BaseHttpTest {
 		doTestDropData(
 				(req, res) -> res.header("Content-Length", "0")
 				                 .sendObject(data),
-				(req, out) -> out);
+				(req, out) -> out,
+				HttpProtocol.HTTP11);
 		assertThat(ReferenceCountUtil.refCnt(data)).isEqualTo(0);
 	}
 
 	private void doTestDropData(
 			BiFunction<? super HttpServerRequest, ? super
 					HttpServerResponse, ? extends Publisher<Void>> serverFn,
-			BiFunction<? super HttpClientRequest, ? super NettyOutbound, ? extends Publisher<Void>> clientFn)
+			BiFunction<? super HttpClientRequest, ? super NettyOutbound, ? extends Publisher<Void>> clientFn,
+			HttpProtocol protocol)
 			throws Exception {
 		disposableServer =
 				createServer()
+				          .protocol(protocol)
 				          .handle(serverFn)
 				          .bindNow(Duration.ofSeconds(30));
 
 		CountDownLatch latch = new CountDownLatch(1);
 		String response =
 				createClient(disposableServer.port())
+				          .protocol(protocol)
 				          .doOnRequest((req, conn) -> conn.onTerminate()
 				                                          .subscribe(null, null, latch::countDown))
 				          .request(HttpMethod.GET)
@@ -1251,7 +1264,8 @@ class HttpServerTests extends BaseHttpTest {
 				          .get()
 				          .uri("/")
 				          .responseContent())
-				    .verifyError(PrematureCloseException.class);
+				    .expectError(PrematureCloseException.class)
+				    .verify(Duration.ofSeconds(10));
 
 		assertThat(latch.await(30, TimeUnit.SECONDS)).isTrue();
 		assertThat(error.get()).isInstanceOf(AbortedException.class);
@@ -1301,7 +1315,7 @@ class HttpServerTests extends BaseHttpTest {
 			                   .doFinally(sig -> latch.countDown())
 			                   .then(Mono.delay(Duration.ofMillis(500)));
 		          })
-		          .blockLast();
+		          .blockLast(Duration.ofSeconds(5));
 
 		assertThat(latch.await(30, TimeUnit.SECONDS)).isTrue();
 		assertThat(receiver.get()).containsAll(test);
@@ -1340,7 +1354,7 @@ class HttpServerTests extends BaseHttpTest {
 		                                              statusClient.set(o);
 		                                              latch.countDown();
 		                                          })))
-		          .blockLast();
+		          .blockLast(Duration.ofSeconds(5));
 
 		assertThat(latch.await(30, TimeUnit.SECONDS)).isTrue();
 		assertThat(statusClient.get()).isNotNull()
@@ -2122,6 +2136,21 @@ class HttpServerTests extends BaseHttpTest {
 
 	@Test
 	void testSniSupport() throws Exception {
+		doTestSniSupport(Function.identity(), Function.identity());
+	}
+
+	@Test
+	void testIssue3022() throws Exception {
+		TestHttpClientMetricsRecorder clientMetricsRecorder = new TestHttpClientMetricsRecorder();
+		TestHttpServerMetricsRecorder serverMetricsRecorder = new TestHttpServerMetricsRecorder();
+		doTestSniSupport(server -> server.metrics(true, () -> serverMetricsRecorder, Function.identity()),
+				client -> client.metrics(true, () -> clientMetricsRecorder, Function.identity()));
+		assertThat(clientMetricsRecorder.tlsHandshakeTime).isNotNull().isGreaterThan(Duration.ZERO);
+		assertThat(serverMetricsRecorder.tlsHandshakeTime).isNotNull().isGreaterThan(Duration.ZERO);
+	}
+
+	private void doTestSniSupport(Function<HttpServer, HttpServer> serverCustomizer,
+			Function<HttpClient, HttpClient> clientCustomizer) throws Exception {
 		SelfSignedCertificate defaultCert = new SelfSignedCertificate("default");
 		Http11SslContextSpec defaultSslContextBuilder =
 				Http11SslContextSpec.forServer(defaultCert.certificate(), defaultCert.privateKey());
@@ -2136,7 +2165,7 @@ class HttpServerTests extends BaseHttpTest {
 
 		AtomicReference<String> hostname = new AtomicReference<>();
 		disposableServer =
-				createServer()
+				serverCustomizer.apply(createServer())
 				          .secure(spec -> spec.sslContext(defaultSslContextBuilder)
 				                              .addSniMapping("*.test.com", domainSpec -> domainSpec.sslContext(testSslContextBuilder)))
 				          .doOnChannelInit((obs, channel, remoteAddress) ->
@@ -2153,7 +2182,7 @@ class HttpServerTests extends BaseHttpTest {
 				          .handle((req, res) -> res.sendString(Mono.just("testSniSupport")))
 				          .bindNow();
 
-		createClient(disposableServer::address)
+		clientCustomizer.apply(createClient(disposableServer::address))
 		          .secure(spec -> spec.sslContext(clientSslContextBuilder)
 		                              .serverNames(new SNIHostName("test.com")))
 		          .get()
@@ -2253,7 +2282,7 @@ class HttpServerTests extends BaseHttpTest {
 		        .aggregate()
 		        .as(StepVerifier::create)
 		        .expectError()
-		        .verify(Duration.ofSeconds(5));
+		        .verify(Duration.ofSeconds(10));
 
 		StepVerifier.create(error.asMono())
 		            .expectNextMatches(t -> t instanceof SslHandshakeTimeoutException)
@@ -2799,7 +2828,8 @@ class HttpServerTests extends BaseHttpTest {
 		StepVerifier.create(createClient(disposableServer.port()).get().uri("/yes/value")
 				.responseSingle((response, byteBufMono) -> byteBufMono.asString()))
 				.expectNext("/yes/{value}")
-				.verifyComplete();
+				.expectComplete()
+				.verify(Duration.ofSeconds(5));
 	}
 
 	@Test
@@ -2813,7 +2843,8 @@ class HttpServerTests extends BaseHttpTest {
 		StepVerifier.create(createClient(disposableServer.port()).get().uri("/yes/value")
 				.responseSingle((response, byteBufMono) -> byteBufMono.asString()))
 				.expectNext("/yes/value")
-				.verifyComplete();
+				.expectComplete()
+				.verify(Duration.ofSeconds(5));
 	}
 
 	@Test
@@ -2828,7 +2859,8 @@ class HttpServerTests extends BaseHttpTest {
 			StepVerifier.create(createClient(disposableServer.port()).get().uri("/yes/value")
 					.responseSingle((response, byteBufMono) -> byteBufMono.asString()))
 					.expectNext("/yes/value")
-					.verifyComplete();
+					.expectComplete()
+					.verify(Duration.ofSeconds(5));
 		}
 		finally {
 			if (disposableServer != null) {
@@ -2842,7 +2874,8 @@ class HttpServerTests extends BaseHttpTest {
 		StepVerifier.create(createClient(disposableServer.port()).get().uri("/yes/value")
 				.responseSingle((response, byteBufMono) -> byteBufMono.asString()))
 				.expectNext("/yes/{value}")
-				.verifyComplete();
+				.expectComplete()
+				.verify(Duration.ofSeconds(5));
 	}
 
 	@Test
@@ -2857,7 +2890,8 @@ class HttpServerTests extends BaseHttpTest {
 			StepVerifier.create(createClient(disposableServer.port()).get().uri("/yes/value")
 					.responseSingle((response, byteBufMono) -> byteBufMono.asString()))
 					.expectNext("/yes/value")
-					.verifyComplete();
+					.expectComplete()
+					.verify(Duration.ofSeconds(5));
 		}
 		finally {
 			if (disposableServer != null) {
@@ -2871,7 +2905,8 @@ class HttpServerTests extends BaseHttpTest {
 		StepVerifier.create(createClient(disposableServer.port()).get().uri("/yes/value")
 				.responseSingle((response, byteBufMono) -> byteBufMono.asString()))
 				.expectNext("/yes/{value}")
-				.verifyComplete();
+				.expectComplete()
+				.verify(Duration.ofSeconds(5));
 	}
 
 	private static final Comparator<HttpRouteHandlerMetadata> comparator = (o1, o2) -> {
@@ -2934,12 +2969,14 @@ class HttpServerTests extends BaseHttpTest {
 			StepVerifier.create(createClient(disposableServer.port()).get().uri("/route1")
 					.responseSingle((response, byteBufMono) -> byteBufMono.asString()))
 					.expectNext("/route1")
-					.verifyComplete();
+					.expectComplete()
+					.verify(Duration.ofSeconds(5));
 
 			StepVerifier.create(createClient(disposableServer.port()).get().uri("/route2")
 					.responseSingle((response, byteBufMono) -> byteBufMono.asString()))
 					.expectNext("/route2")
-					.verifyComplete();
+					.expectComplete()
+					.verify(Duration.ofSeconds(5));
 		}
 		finally {
 			if (disposableServer != null) {
@@ -2956,12 +2993,14 @@ class HttpServerTests extends BaseHttpTest {
 		StepVerifier.create(createClient(disposableServer.port()).get().uri("/route1")
 				.response())
 				.expectNextMatches(response -> response.status().equals(HttpResponseStatus.NOT_FOUND))
-				.verifyComplete();
+				.expectComplete()
+				.verify(Duration.ofSeconds(5));
 
 		StepVerifier.create(createClient(disposableServer.port()).get().uri("/route2")
 				.responseSingle((response, byteBufMono) -> byteBufMono.asString()))
 				.expectNext("/route2")
-				.verifyComplete();
+				.expectComplete()
+				.verify(Duration.ofSeconds(5));
 	}
 
 	@ParameterizedTest(name = "{displayName}({arguments})")
@@ -3067,7 +3106,7 @@ class HttpServerTests extends BaseHttpTest {
 	}
 
 	/**
-	 * This test verifies if server h2 streams are closed properly when the server does not consume client post data chunks
+	 * This test verifies if server h2 streams are closed properly when the server does not consume client post data chunks.
 	 */
 	@ParameterizedTest
 	@MethodSource("h2cCompatibleCombinations")
@@ -3082,7 +3121,7 @@ class HttpServerTests extends BaseHttpTest {
 	}
 
 	/**
-	 * This test verifies if server h2 streams are closed properly when the server does not consume client post data chunks
+	 * This test verifies if server h2 streams are closed properly when the server does not consume client post data chunks.
 	 */
 	@ParameterizedTest
 	@MethodSource("h2CompatibleCombinations")
@@ -3566,5 +3605,113 @@ class HttpServerTests extends BaseHttpTest {
 				.expectNextMatches(HttpResponseStatus.OK::equals)
 				.expectErrorMatches(t -> t instanceof PrematureCloseException && t.getCause() instanceof Http2Exception.HeaderListSizeException)
 				.verify(Duration.ofSeconds(30));
+	}
+
+	static final class TestHttpServerMetricsRecorder implements HttpServerMetricsRecorder {
+
+		Duration tlsHandshakeTime;
+
+		@Override
+		public void recordDataReceived(SocketAddress remoteAddress, long bytes) {
+		}
+
+		@Override
+		public void recordDataSent(SocketAddress remoteAddress, long bytes) {
+		}
+
+		@Override
+		public void incrementErrorsCount(SocketAddress remoteAddress) {
+		}
+
+		@Override
+		public void recordTlsHandshakeTime(SocketAddress remoteAddress, Duration time, String status) {
+			tlsHandshakeTime = time;
+		}
+
+		@Override
+		public void recordConnectTime(SocketAddress remoteAddress, Duration time, String status) {
+		}
+
+		@Override
+		public void recordResolveAddressTime(SocketAddress remoteAddress, Duration time, String status) {
+		}
+
+		@Override
+		public void recordDataReceived(SocketAddress remoteAddress, String uri, long bytes) {
+		}
+
+		@Override
+		public void recordDataSent(SocketAddress remoteAddress, String uri, long bytes) {
+		}
+
+		@Override
+		public void incrementErrorsCount(SocketAddress remoteAddress, String uri) {
+		}
+
+		@Override
+		public void recordDataReceivedTime(String uri, String method, Duration time) {
+		}
+
+		@Override
+		public void recordDataSentTime(String uri, String method, String status, Duration time) {
+		}
+
+		@Override
+		public void recordResponseTime(String uri, String method, String status, Duration time) {
+		}
+	}
+
+	static final class TestHttpClientMetricsRecorder implements HttpClientMetricsRecorder {
+
+		Duration tlsHandshakeTime;
+
+		@Override
+		public void recordDataReceived(SocketAddress remoteAddress, long bytes) {
+		}
+
+		@Override
+		public void recordDataSent(SocketAddress remoteAddress, long bytes) {
+		}
+
+		@Override
+		public void incrementErrorsCount(SocketAddress remoteAddress) {
+		}
+
+		@Override
+		public void recordTlsHandshakeTime(SocketAddress remoteAddress, Duration time, String status) {
+			tlsHandshakeTime = time;
+		}
+
+		@Override
+		public void recordConnectTime(SocketAddress remoteAddress, Duration time, String status) {
+		}
+
+		@Override
+		public void recordResolveAddressTime(SocketAddress remoteAddress, Duration time, String status) {
+		}
+
+		@Override
+		public void recordDataReceived(SocketAddress remoteAddress, String uri, long bytes) {
+		}
+
+		@Override
+		public void recordDataSent(SocketAddress remoteAddress, String uri, long bytes) {
+		}
+
+		@Override
+		public void incrementErrorsCount(SocketAddress remoteAddress, String uri) {
+		}
+
+		@Override
+		public void recordDataReceivedTime(SocketAddress remoteAddress, String uri, String method, String status, Duration time) {
+		}
+
+		@Override
+		public void recordDataSentTime(SocketAddress remoteAddress, String uri, String method, Duration time) {
+		}
+
+		@Override
+		public void recordResponseTime(SocketAddress remoteAddress, String uri, String method, String status, Duration time) {
+		}
 	}
 }

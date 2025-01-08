@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018-2022 VMware, Inc. or its affiliates, All Rights Reserved.
+ * Copyright (c) 2018-2023 VMware, Inc. or its affiliates, All Rights Reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -39,7 +39,7 @@ import java.util.function.Consumer;
 import java.util.function.Supplier;
 
 /**
- * A {@link ConnectionProvider} will produce {@link Connection}
+ * A {@link ConnectionProvider} will produce {@link Connection}.
  *
  * @author Stephane Maldini
  * @since 0.8
@@ -99,7 +99,7 @@ public interface ConnectionProvider extends Disposable {
 					.toLowerCase(Locale.ENGLISH);
 
 	/**
-	 * Creates a builder for {@link ConnectionProvider}
+	 * Creates a builder for {@link ConnectionProvider}.
 	 *
 	 * @param name {@link ConnectionProvider} name
 	 * @return a new ConnectionProvider builder
@@ -239,7 +239,7 @@ public interface ConnectionProvider extends Disposable {
 	}
 
 	/**
-	 * Returns the maximum number of connections before starting pending
+	 * Returns the maximum number of connections before starting pending.
 	 *
 	 * @return the maximum number of connections before starting pending
 	 */
@@ -248,7 +248,7 @@ public interface ConnectionProvider extends Disposable {
 	}
 
 	/**
-	 * Returns the maximum number of connections per host before starting pending
+	 * Returns the maximum number of connections per host before starting pending.
 	 *
 	 * @return the maximum number of connections per host before starting pending
 	 */
@@ -258,7 +258,7 @@ public interface ConnectionProvider extends Disposable {
 	}
 
 	/**
-	 * Returns a builder to mutate properties of this {@link ConnectionProvider}
+	 * Returns a builder to mutate properties of this {@link ConnectionProvider}.
 	 *
 	 * @return a builder to mutate properties of this {@link ConnectionProvider}
 	 * @since 1.0.14
@@ -269,7 +269,7 @@ public interface ConnectionProvider extends Disposable {
 	}
 
 	/**
-	 * Returns {@link ConnectionProvider} name used for metrics
+	 * Returns {@link ConnectionProvider} name used for metrics.
 	 *
 	 * @return {@link ConnectionProvider} name used for metrics
 	 * @since 1.0.14
@@ -350,7 +350,7 @@ public interface ConnectionProvider extends Disposable {
 		int getPermits(int desired);
 
 		/**
-		 * Returns the best estimate of the number of permits currently granted, between 0 and {@link Integer#MAX_VALUE}
+		 * Returns the best estimate of the number of permits currently granted, between 0 and {@link Integer#MAX_VALUE}.
 		 *
 		 * @return the best estimate of the number of permits currently granted, between 0 and {@link Integer#MAX_VALUE}
 		 */
@@ -365,7 +365,7 @@ public interface ConnectionProvider extends Disposable {
 		int permitMinimum();
 
 		/**
-		 * Returns the maximum number of permits this strategy can grant in total, or {@link Integer#MAX_VALUE} for unbounded
+		 * Returns the maximum number of permits this strategy can grant in total, or {@link Integer#MAX_VALUE} for unbounded.
 		 *
 		 * @return the maximum number of permits this strategy can grant in total, or {@link Integer#MAX_VALUE} for unbounded
 		 */
@@ -421,7 +421,7 @@ public interface ConnectionProvider extends Disposable {
 		}
 
 		/**
-		 * {@link ConnectionProvider} name is used for metrics
+		 * {@link ConnectionProvider} name is used for metrics.
 		 *
 		 * @param name {@link ConnectionProvider} name
 		 * @return {@literal this}
@@ -489,7 +489,7 @@ public interface ConnectionProvider extends Disposable {
 		}
 
 		/**
-		 * Builds new ConnectionProvider
+		 * Builds new ConnectionProvider.
 		 *
 		 * @return builds new ConnectionProvider
 		 */
@@ -570,8 +570,8 @@ public interface ConnectionProvider extends Disposable {
 		 *
 		 * @param maxConnections the maximum number of connections (per connection pool) before start pending
 		 * @return {@literal this}
-		 * @see #allocationStrategy(AllocationStrategy)
 		 * @throws IllegalArgumentException if maxConnections is negative
+		 * @see #allocationStrategy(AllocationStrategy)
 		 */
 		public final SPEC maxConnections(int maxConnections) {
 			if (maxConnections <= 0) {
@@ -783,8 +783,8 @@ public interface ConnectionProvider extends Disposable {
 		 *
 		 * @param allocationStrategy the {@link AllocationStrategy} to use
 		 * @return {@literal this}
-		 * @see #maxConnections()
 		 * @since 1.0.20
+		 * @see #maxConnections()
 		 */
 		public final SPEC allocationStrategy(AllocationStrategy<?> allocationStrategy) {
 			this.allocationStrategy = Objects.requireNonNull(allocationStrategy, "allocationStrategy");
