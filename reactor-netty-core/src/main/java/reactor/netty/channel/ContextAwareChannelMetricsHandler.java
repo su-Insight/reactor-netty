@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021-2022 VMware, Inc. or its affiliates, All Rights Reserved.
+ * Copyright (c) 2021-2024 VMware, Inc. or its affiliates, All Rights Reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -22,6 +22,7 @@ import io.netty.channel.ChannelPromise;
 import reactor.netty.Connection;
 import reactor.netty.ConnectionObserver;
 import reactor.util.annotation.Nullable;
+import reactor.util.context.ContextView;
 
 import java.net.SocketAddress;
 import java.time.Duration;
@@ -30,6 +31,8 @@ import static reactor.netty.Metrics.ERROR;
 import static reactor.netty.Metrics.SUCCESS;
 
 /**
+ * {@link AbstractChannelMetricsHandler} that propagates {@link ContextView}.
+ *
  * @author Violeta Georgieva
  * @since 1.0.8
  */
@@ -50,7 +53,7 @@ final class ContextAwareChannelMetricsHandler extends AbstractChannelMetricsHand
 
 	@Override
 	public ChannelHandler tlsMetricsHandler() {
-		return new TlsMetricsHandler(recorder);
+		return new TlsMetricsHandler(recorder, remoteAddress);
 	}
 
 	@Override
@@ -130,8 +133,9 @@ final class ContextAwareChannelMetricsHandler extends AbstractChannelMetricsHand
 	}
 
 	static final class TlsMetricsHandler extends ChannelMetricsHandler.TlsMetricsHandler {
-		TlsMetricsHandler(ContextAwareChannelMetricsRecorder recorder) {
-			super(recorder);
+
+		TlsMetricsHandler(ContextAwareChannelMetricsRecorder recorder, @Nullable SocketAddress remoteAddress) {
+			super(recorder, remoteAddress);
 		}
 
 		@Override
@@ -140,7 +144,7 @@ final class ContextAwareChannelMetricsHandler extends AbstractChannelMetricsHand
 			if (connection instanceof ConnectionObserver) {
 				((ContextAwareChannelMetricsRecorder) recorder).recordTlsHandshakeTime(
 						((ConnectionObserver) connection).currentContext(),
-						ctx.channel().remoteAddress(),
+						remoteAddress != null ? remoteAddress : ctx.channel().remoteAddress(),
 						Duration.ofNanos(System.nanoTime() - tlsHandshakeTimeStart),
 						status);
 			}

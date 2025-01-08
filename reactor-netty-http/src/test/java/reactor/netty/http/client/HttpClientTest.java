@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011-2023 VMware, Inc. or its affiliates, All Rights Reserved.
+ * Copyright (c) 2011-2024 VMware, Inc. or its affiliates, All Rights Reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -136,6 +136,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatExceptionOfType;
 
 /**
+ * This test class verifies {@link HttpClient}.
+ *
  * @author Stephane Maldini
  * @since 0.6
  */
@@ -364,7 +366,7 @@ class HttpClientTest extends BaseHttpTest {
 		        .get()
 		        .uri("/")
 		        .response()
-		        .block();
+		        .block(Duration.ofSeconds(5));
 
 		latch.await();
 	}
@@ -378,7 +380,7 @@ class HttpClientTest extends BaseHttpTest {
 		                              .response((r, buf) -> Mono.just(r.status().code())))
 		            .expectNextMatches(status -> status >= 200 && status < 400)
 		            .expectComplete()
-		            .verify();
+		            .verify(Duration.ofSeconds(5));
 
 		StepVerifier.create(HttpClient.create()
 		                              .wiretap(true)
@@ -387,7 +389,7 @@ class HttpClientTest extends BaseHttpTest {
 		                              .response((r, buf) -> Mono.just(r.status().code())))
 		            .expectNextMatches(status -> status >= 200 && status < 400)
 		            .expectComplete()
-		            .verify();
+		            .verify(Duration.ofSeconds(5));
 	}
 
 	@Test
@@ -414,7 +416,8 @@ class HttpClientTest extends BaseHttpTest {
 				        .uri("/")
 				        .responseContent()
 				        .timeout(signal.asFlux()))
-				    .verifyError(TimeoutException.class);
+				    .expectError(TimeoutException.class)
+				    .verify(Duration.ofSeconds(5));
 	}
 
 	@Test
@@ -526,7 +529,7 @@ class HttpClientTest extends BaseHttpTest {
 		        .get()
 		        .uri("/")
 		        .responseContent()
-		        .blockLast();
+		        .blockLast(Duration.ofSeconds(5));
 	}
 
 	@Test
@@ -584,7 +587,7 @@ class HttpClientTest extends BaseHttpTest {
 		                                .get()
 		                                .uri("/foo")
 		                                .responseSingle((res, buf) -> buf.asString(CharsetUtil.UTF_8))
-		                                .block();
+		                                .block(Duration.ofSeconds(5));
 
 		assertThat(responseString).isEqualTo("hello /foo");
 	}
@@ -694,7 +697,7 @@ class HttpClientTest extends BaseHttpTest {
 		        .put()
 		        .uri("/201")
 		        .responseContent()
-		        .blockLast();
+		        .blockLast(Duration.ofSeconds(5));
 
 		createHttpClientForContextWithAddress()
 		        .doOnRequest((r, c) -> onReq.getAndIncrement())
@@ -750,7 +753,7 @@ class HttpClientTest extends BaseHttpTest {
 		        }))
 		        .responseContent()
 		        .repeat(4)
-		        .blockLast();
+		        .blockLast(Duration.ofSeconds(5));
 	}
 
 	@Test
@@ -770,7 +773,7 @@ class HttpClientTest extends BaseHttpTest {
 		        .uri("/201")
 		        .responseContent()
 		        .repeat(4)
-		        .blockLast();
+		        .blockLast(Duration.ofSeconds(30));
 	}
 
 	@Test
@@ -797,7 +800,7 @@ class HttpClientTest extends BaseHttpTest {
 		        .get()
 		        .uri("/201")
 		        .responseContent()
-		        .blockLast();
+		        .blockLast(Duration.ofSeconds(5));
 	}
 
 	@Test
@@ -829,7 +832,7 @@ class HttpClientTest extends BaseHttpTest {
 				                      .log()))
 				    .expectNextSequence(expected)
 				    .expectComplete()
-				    .verify();
+				    .verify(Duration.ofSeconds(5));
 
 		pr.dispose();
 	}
@@ -1146,7 +1149,8 @@ class HttpClientTest extends BaseHttpTest {
 				      .asString();
 
 		StepVerifier.create(content)
-		            .verifyError(PrematureCloseException.class);
+		            .expectError(PrematureCloseException.class)
+		            .verify(Duration.ofSeconds(5));
 
 		assertThat(requestError1.get()).isEqualTo("success");
 		assertThat(responseError1.get()).isNull();
@@ -1169,7 +1173,8 @@ class HttpClientTest extends BaseHttpTest {
 				        .asString();
 
 		StepVerifier.create(content)
-		            .verifyError(PrematureCloseException.class);
+		            .expectError(PrematureCloseException.class)
+		            .verify(Duration.ofSeconds(5));
 
 		assertThat(requestError2.get()).isNull();
 		assertThat(responseError2.get()).isEqualTo("success");
@@ -1200,7 +1205,8 @@ class HttpClientTest extends BaseHttpTest {
 
 		StepVerifier.create(content)
 		            .expectNext("success")
-		            .verifyComplete();
+		            .expectComplete()
+		            .verify(Duration.ofSeconds(5));
 	}
 
 	@ParameterizedTest
@@ -3264,7 +3270,7 @@ class HttpClientTest extends BaseHttpTest {
 		}
 		finally {
 			loop.disposeLater()
-			    .block();
+			    .block(Duration.ofSeconds(5));
 		}
 	}
 

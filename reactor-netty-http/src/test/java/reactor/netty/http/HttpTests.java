@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017-2023 VMware, Inc. or its affiliates, All Rights Reserved.
+ * Copyright (c) 2017-2024 VMware, Inc. or its affiliates, All Rights Reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -41,6 +41,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatExceptionOfType;
 
 /**
+ * This test class verifies basic HTTP functionality.
+ *
  * @author Violeta Georgieva
  */
 class HttpTests extends BaseHttpTest {
@@ -167,7 +169,8 @@ class HttpTests extends BaseHttpTest {
 
 		StepVerifier.create(code)
 				    .expectNext(500)
-				    .verifyComplete();
+				    .expectComplete()
+				    .verify(Duration.ofSeconds(5));
 
 		Mono<ByteBuf> content =
 				client.get()
@@ -231,7 +234,8 @@ class HttpTests extends BaseHttpTest {
 
 		StepVerifier.create(code)
 		            .expectNext(500)
-		            .verifyComplete();
+		            .expectComplete()
+		            .verify(Duration.ofSeconds(5));
 	}
 
 	/*
@@ -324,7 +328,7 @@ class HttpTests extends BaseHttpTest {
 				          .aggregate()
 				          .asString()
 				          .log()
-				          .block();
+				          .block(Duration.ofSeconds(5));
 
 		Flux<String> f = createClient(disposableServer.port())
 		                           .compress(true)
@@ -343,7 +347,8 @@ class HttpTests extends BaseHttpTest {
 		            .expectNext("test2")
 		            .thenAwait(Duration.ofMillis(30))
 		            .then(() -> ep.tryEmitComplete().orThrow())
-		            .verifyComplete();
+		            .expectComplete()
+		            .verify(Duration.ofSeconds(5));
 
 
 
@@ -356,7 +361,7 @@ class HttpTests extends BaseHttpTest {
 		          .aggregate()
 		          .asString()
 		          .log()
-		          .block();
+		          .block(Duration.ofSeconds(5));
 	}
 
 
@@ -389,7 +394,7 @@ class HttpTests extends BaseHttpTest {
 				          .aggregate()
 				          .asString()
 				          .log()
-				          .block();
+				          .block(Duration.ofSeconds(5));
 
 		Flux<String> f = createClient(disposableServer.port())
 		                           .compress(true)
@@ -408,7 +413,8 @@ class HttpTests extends BaseHttpTest {
 		            .expectNext("test2")
 		            .thenAwait(Duration.ofMillis(30))
 		            .then(() -> ep.tryEmitComplete().orThrow())
-		            .verifyComplete();
+		            .expectComplete()
+		            .verify(Duration.ofSeconds(5));
 
 
 
@@ -421,7 +427,7 @@ class HttpTests extends BaseHttpTest {
 		          .aggregate()
 		          .asString()
 		          .log()
-		          .block();
+		          .block(Duration.ofSeconds(5));
 	}
 
 	@Test

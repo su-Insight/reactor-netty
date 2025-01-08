@@ -100,7 +100,7 @@ import static reactor.netty.http.server.HttpServerFormDecoderProvider.DEFAULT_FO
 import static reactor.netty.http.server.HttpServerState.REQUEST_DECODING_FAILED;
 
 /**
- * Conversion between Netty types  and Reactor types ({@link HttpOperations}.
+ * Conversion between Netty types and Reactor types ({@link HttpOperations}.
  *
  * @author Stephane Maldini1
  */
@@ -534,7 +534,9 @@ class HttpServerOperations extends HttpOperations<HttpServerRequest, HttpServerR
 	}
 
 	/**
-	 * @return the Transfer setting SSE for this http connection (e.g. event-stream)
+	 * The {@code Content-Type} setting SSE for this http connection (e.g. event-stream).
+	 *
+	 * @return the {@code Content-Type} setting SSE for this http connection (e.g. event-stream)
 	 */
 	@Override
 	public HttpServerResponse sse() {
@@ -869,7 +871,7 @@ class HttpServerOperations extends HttpOperations<HttpServerRequest, HttpServerR
 
 	/**
 	 * There is no need of invoking {@link #discard()}, the inbound will
-	 * be canceled on channel inactive event if there is no subscriber available
+	 * be canceled on channel inactive event if there is no subscriber available.
 	 *
 	 * @param err the {@link Throwable} cause
 	 */
@@ -1103,7 +1105,7 @@ class HttpServerOperations extends HttpOperations<HttpServerRequest, HttpServerR
 		static final class TrailerNameValidator implements DefaultHeaders.NameValidator<CharSequence> {
 
 			/**
-			 * Contains the headers names specified with {@link HttpHeaderNames#TRAILER}
+			 * Contains the headers names specified with {@link HttpHeaderNames#TRAILER}.
 			 */
 			final Set<String> declaredHeaderNames;
 

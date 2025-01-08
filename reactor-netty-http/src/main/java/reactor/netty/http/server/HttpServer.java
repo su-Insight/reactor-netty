@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011-2022 VMware, Inc. or its affiliates, All Rights Reserved.
+ * Copyright (c) 2011-2024 VMware, Inc. or its affiliates, All Rights Reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -78,7 +78,7 @@ import static reactor.netty.ReactorNetty.format;
 public abstract class HttpServer extends ServerTransport<HttpServer, HttpServerConfig> {
 
 	/**
-	 * Prepare an {@link HttpServer}
+	 * Prepare an {@link HttpServer}.
 	 *
 	 * @return a new {@link HttpServer}
 	 */
@@ -315,7 +315,7 @@ public abstract class HttpServer extends ServerTransport<HttpServer, HttpServerC
 
 	/**
 	 * Enable GZip response compression if the client request presents accept encoding
-	 * headers AND the response reaches a minimum threshold
+	 * headers AND the response reaches a minimum threshold.
 	 *
 	 * @param minResponseSize compression is performed once response size exceeds the given
 	 * value in bytes
@@ -334,7 +334,7 @@ public abstract class HttpServer extends ServerTransport<HttpServer, HttpServerC
 	/**
 	 * Configure the
 	 * {@link ServerCookieEncoder}; {@link ServerCookieDecoder} will be
-	 * chosen based on the encoder
+	 * chosen based on the encoder.
 	 *
 	 * @param encoder the preferred ServerCookieEncoder
 	 *
@@ -352,7 +352,7 @@ public abstract class HttpServer extends ServerTransport<HttpServer, HttpServerC
 
 	/**
 	 * Configure the
-	 * {@link ServerCookieEncoder} and {@link ServerCookieDecoder}
+	 * {@link ServerCookieEncoder} and {@link ServerCookieDecoder}.
 	 *
 	 * @param encoder the preferred ServerCookieEncoder
 	 * @param decoder the preferred ServerCookieDecoder
@@ -410,7 +410,7 @@ public abstract class HttpServer extends ServerTransport<HttpServer, HttpServerC
 	}
 
 	/**
-	 * Attach an I/O handler to react on a connected client
+	 * Attach an I/O handler to react on a connected client.
 	 *
 	 * @param handler an I/O handler that can dispose underlying connection when {@link
 	 * Publisher} terminates. Only the first registered handler will subscribe to the
@@ -431,7 +431,7 @@ public abstract class HttpServer extends ServerTransport<HttpServer, HttpServerC
 	}
 
 	/**
-	 * Apply HTTP/2 configuration
+	 * Apply HTTP/2 configuration.
 	 *
 	 * @param http2Settings configures {@link Http2SettingsSpec} before requesting
 	 * @return a new {@link HttpServer}
@@ -624,6 +624,73 @@ public abstract class HttpServer extends ServerTransport<HttpServer, HttpServerC
 		}
 	}
 
+	/**
+	 * Whether to enable metrics to be collected and registered in Micrometer's
+	 * {@link io.micrometer.core.instrument.Metrics#globalRegistry globalRegistry}
+	 * under the name {@link reactor.netty.Metrics#HTTP_SERVER_PREFIX}.
+	 * <p>{@code uriTagValue} function receives the actual uri and returns the uri tag value
+	 * that will be used for the metrics with {@link reactor.netty.Metrics#URI} tag.
+	 * For example instead of using the actual uri {@code "/users/1"} as uri tag value, templated uri
+	 * {@code "/users/{id}"} can be used.
+	 * <p><strong>Note:</strong>
+	 * It is strongly recommended to provide template-like form for the URIs. Without a conversion to a template-like form,
+	 * each distinct URI leads to the creation of a distinct tag, which takes a lot of memory for the metrics.
+	 * <p><strong>Note:</strong>
+	 * It is strongly recommended applications to configure an upper limit for the number of the URI tags.
+	 * For example:
+	 * <pre class="code">
+	 * Metrics.globalRegistry
+	 *        .config()
+	 *        .meterFilter(MeterFilter.maximumAllowableTags(HTTP_SERVER_PREFIX, URI, 100, MeterFilter.deny()));
+	 * </pre>
+	 * <p>{@code methodTagValue} function receives the actual method name and returns the method tag value
+	 * that will be used for the metrics with {@link reactor.netty.Metrics#METHOD} tag.
+	 * <p>By default metrics are not enabled.
+	 *
+	 * @param enable true enables metrics collection; false disables it
+	 * @param uriTagValue a function that receives the actual uri and returns the uri tag value
+	 * that will be used for the metrics with {@link reactor.netty.Metrics#URI} tag
+	 * @param methodTagValue a function that receives the actual method name and returns the method tag value
+	 * that will be used for the metrics with {@link reactor.netty.Metrics#METHOD} tag
+	 * @return a new {@link HttpServer}
+	 * @since 1.0.39
+	 */
+	public final HttpServer metrics(boolean enable, Function<String, String> uriTagValue, Function<String, String> methodTagValue) {
+		if (enable) {
+			Objects.requireNonNull(methodTagValue, "methodTagValue");
+			if (!Metrics.isInstrumentationAvailable()) {
+				throw new UnsupportedOperationException(
+						"To enable metrics, you must add the dependency `io.micrometer:micrometer-core`" +
+								" to the class path first");
+			}
+			if (uriTagValue == Function.<String>identity()) {
+				log.debug("Metrics are enabled with [uriTagValue=Function#identity]. " +
+						"It is strongly recommended to provide template-like form for the URIs. " +
+						"Without a conversion to a template-like form, each distinct URI leads " +
+						"to the creation of a distinct tag, which takes a lot of memory for the metrics.");
+			}
+			if (methodTagValue == Function.<String>identity()) {
+				log.debug("Metrics are enabled with [methodTagValue=Function#identity]. " +
+						"It is strongly recommended to provide a function for transforming the method names.");
+			}
+			HttpServer dup = duplicate();
+			dup.configuration().metricsRecorder(() -> configuration().defaultMetricsRecorder());
+			dup.configuration().methodTagValue = methodTagValue;
+			dup.configuration().uriTagValue = uriTagValue;
+			return dup;
+		}
+		else if (configuration().metricsRecorder() != null) {
+			HttpServer dup = duplicate();
+			dup.configuration().metricsRecorder(null);
+			dup.configuration().methodTagValue = null;
+			dup.configuration().uriTagValue = null;
+			return dup;
+		}
+		else {
+			return this;
+		}
+	}
+
 	@Override
 	public final HttpServer metrics(boolean enable, Supplier<? extends ChannelMetricsRecorder> recorder) {
 		return super.metrics(enable, recorder);
@@ -664,7 +731,50 @@ public abstract class HttpServer extends ServerTransport<HttpServer, HttpServerC
 	}
 
 	/**
-	 * Removes any previously applied SSL configuration customization
+	 * Specifies whether the metrics are enabled on the {@link HttpServer}.
+	 * All generated metrics are provided to the specified recorder which is only
+	 * instantiated if metrics are being enabled (the instantiation is not lazy,
+	 * but happens immediately, while configuring the {@link HttpServer}).
+	 * <p>{@code uriValue} function receives the actual uri and returns the uri value
+	 * that will be used when the metrics are propagated to the recorder.
+	 * For example instead of using the actual uri {@code "/users/1"} as uri value, templated uri
+	 * {@code "/users/{id}"} can be used.
+	 * <p>{@code methodValue} function receives the actual method name and returns the method value
+	 * that will be used when the metrics are propagated to the recorder.
+	 *
+	 * @param enable true enables metrics collection; false disables it
+	 * @param recorder a supplier for the metrics recorder that receives the collected metrics
+	 * @param uriValue a function that receives the actual uri and returns the uri value
+	 * that will be used when the metrics are propagated to the recorder.
+	 * @param methodValue a function that receives the actual method name and returns the method value
+	 * that will be used when the metrics are propagated to the recorder.
+	 * @return a new {@link HttpServer}
+	 * @since 1.0.39
+	 */
+	public final HttpServer metrics(boolean enable, Supplier<? extends ChannelMetricsRecorder> recorder,
+			Function<String, String> uriValue, Function<String, String> methodValue) {
+		if (enable) {
+			Objects.requireNonNull(methodValue, "methodTagValue");
+			HttpServer dup = duplicate();
+			dup.configuration().metricsRecorder(recorder);
+			dup.configuration().methodTagValue = methodValue;
+			dup.configuration().uriTagValue = uriValue;
+			return dup;
+		}
+		else if (configuration().metricsRecorder() != null) {
+			HttpServer dup = duplicate();
+			dup.configuration().metricsRecorder(null);
+			dup.configuration().methodTagValue = null;
+			dup.configuration().uriTagValue = null;
+			return dup;
+		}
+		else {
+			return this;
+		}
+	}
+
+	/**
+	 * Removes any previously applied SSL configuration customization.
 	 *
 	 * @return a new {@link HttpServer}
 	 */
@@ -677,6 +787,13 @@ public abstract class HttpServer extends ServerTransport<HttpServer, HttpServerC
 		return this;
 	}
 
+	/**
+	 * The port to which this server should bind.
+	 * If a port is not specified, the system picks up an ephemeral port.
+	 *
+	 * @param port The port to bind to.
+	 * @return a new {@link HttpServer}
+	 */
 	@Override
 	public final HttpServer port(int port) {
 		return super.port(port);
