@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011-2023 VMware, Inc. or its affiliates, All Rights Reserved.
+ * Copyright (c) 2011-2024 VMware, Inc. or its affiliates, All Rights Reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -20,7 +20,9 @@ import java.net.URI;
 import java.net.URISyntaxException;
 import java.nio.channels.ClosedChannelException;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.Collections;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
@@ -38,6 +40,7 @@ import io.netty.buffer.Unpooled;
 import io.netty.channel.ChannelFuture;
 import io.netty.channel.ChannelHandler;
 import io.netty.channel.ChannelHandlerContext;
+import io.netty.handler.codec.compression.ZlibCodecFactory;
 import io.netty.handler.codec.http.DefaultFullHttpRequest;
 import io.netty.handler.codec.http.DefaultHttpRequest;
 import io.netty.handler.codec.http.FullHttpResponse;
@@ -59,7 +62,9 @@ import io.netty.handler.codec.http.cookie.Cookie;
 import io.netty.handler.codec.http.multipart.DefaultHttpDataFactory;
 import io.netty.handler.codec.http.multipart.HttpDataFactory;
 import io.netty.handler.codec.http.multipart.HttpPostRequestEncoder;
-import io.netty.handler.codec.http.websocketx.extensions.compression.WebSocketClientCompressionHandler;
+import io.netty.handler.codec.http.websocketx.extensions.WebSocketClientExtensionHandler;
+import io.netty.handler.codec.http.websocketx.extensions.compression.DeflateFrameClientExtensionHandshaker;
+import io.netty.handler.codec.http.websocketx.extensions.compression.PerMessageDeflateClientExtensionHandshaker;
 import io.netty.handler.codec.http2.Http2StreamChannel;
 import io.netty.handler.stream.ChunkedWriteHandler;
 import io.netty.handler.timeout.ReadTimeoutHandler;
@@ -90,9 +95,12 @@ import reactor.util.Loggers;
 import reactor.util.annotation.Nullable;
 import reactor.util.context.ContextView;
 
+import static io.netty.handler.codec.http.websocketx.extensions.compression.PerMessageDeflateServerExtensionHandshaker.MAX_WINDOW_SIZE;
 import static reactor.netty.ReactorNetty.format;
 
 /**
+ * Conversion between Netty types and Reactor types ({@link HttpOperations}.
+ *
  * @author Stephane Maldini
  * @author Simon Baslé
  */
@@ -104,6 +112,7 @@ class HttpClientOperations extends HttpOperations<NettyInbound, NettyOutbound>
 	final HttpHeaders            requestHeaders;
 	final ClientCookieEncoder    cookieEncoder;
 	final ClientCookieDecoder    cookieDecoder;
+	final List<Cookie>           cookieList;
 	final Sinks.One<HttpHeaders> trailerHeaders;
 
 	Supplier<String>[]          redirectedFrom = EMPTY_REDIRECTIONS;
@@ -142,6 +151,7 @@ class HttpClientOperations extends HttpOperations<NettyInbound, NettyOutbound>
 		this.requestHeaders = replaced.requestHeaders;
 		this.cookieEncoder = replaced.cookieEncoder;
 		this.cookieDecoder = replaced.cookieDecoder;
+		this.cookieList = replaced.cookieList;
 		this.resourceUrl = replaced.resourceUrl;
 		this.path = replaced.path;
 		this.responseTimeout = replaced.responseTimeout;
@@ -163,14 +173,14 @@ class HttpClientOperations extends HttpOperations<NettyInbound, NettyOutbound>
 		this.requestHeaders = nettyRequest.headers();
 		this.cookieDecoder = decoder;
 		this.cookieEncoder = encoder;
+		this.cookieList = new ArrayList<>();
 		this.trailerHeaders = Sinks.unsafe().one();
 	}
 
 	@Override
 	public HttpClientRequest addCookie(Cookie cookie) {
 		if (!hasSentHeaders()) {
-			this.requestHeaders.add(HttpHeaderNames.COOKIE,
-					cookieEncoder.encode(cookie));
+			this.cookieList.add(cookie);
 		}
 		else {
 			throw new IllegalStateException("Status and headers already sent");
@@ -594,6 +604,10 @@ class HttpClientOperations extends HttpOperations<NettyInbound, NettyOutbound>
 				previousRequestHeaders = null;
 			}
 		}
+
+		if (!cookieList.isEmpty()) {
+			requestHeaders.add(HttpHeaderNames.COOKIE, cookieEncoder.encode(cookieList));
+		}
 	}
 
 	@Override
@@ -629,8 +643,19 @@ class HttpClientOperations extends HttpOperations<NettyInbound, NettyOutbound>
 		}
 		listener().onStateChange(this, HttpClientState.REQUEST_SENT);
 		if (responseTimeout != null) {
-			addHandlerFirst(NettyPipeline.ResponseTimeoutHandler,
-					new ReadTimeoutHandler(responseTimeout.toMillis(), TimeUnit.MILLISECONDS));
+			if (channel().pipeline().get(NettyPipeline.HttpMetricsHandler) != null) {
+				if (channel().pipeline().get(NettyPipeline.ResponseTimeoutHandler) == null) {
+					channel().pipeline().addBefore(NettyPipeline.HttpMetricsHandler, NettyPipeline.ResponseTimeoutHandler,
+							new ReadTimeoutHandler(responseTimeout.toMillis(), TimeUnit.MILLISECONDS));
+					if (isPersistent()) {
+						onTerminate().subscribe(null, null, () -> removeHandler(NettyPipeline.ResponseTimeoutHandler));
+					}
+				}
+			}
+			else {
+				addHandlerFirst(NettyPipeline.ResponseTimeoutHandler,
+						new ReadTimeoutHandler(responseTimeout.toMillis(), TimeUnit.MILLISECONDS));
+			}
 		}
 		channel().read();
 		if (channel().parent() != null) {
@@ -742,7 +767,9 @@ class HttpClientOperations extends HttpOperations<NettyInbound, NettyOutbound>
 				log.debug(format(channel(), "Received last HTTP packet"));
 			}
 			if (msg != LastHttpContent.EMPTY_LAST_CONTENT) {
-				if (redirecting != null) {
+				// When there is HTTP/2 response with INBOUND HEADERS(endStream=false) followed by INBOUND DATA(endStream=true length=0),
+				// Netty sends LastHttpContent with empty buffer instead of EMPTY_LAST_CONTENT
+				if (redirecting != null || ((LastHttpContent) msg).content().readableBytes() == 0) {
 					ReferenceCountUtil.release(msg);
 				}
 				else {
@@ -868,7 +895,15 @@ class HttpClientOperations extends HttpOperations<NettyInbound, NettyOutbound>
 				// Returned value is deliberately ignored
 				removeHandler(NettyPipeline.HttpDecompressor);
 				// Returned value is deliberately ignored
-				addHandlerFirst(NettyPipeline.WsCompressionHandler, WebSocketClientCompressionHandler.INSTANCE);
+				PerMessageDeflateClientExtensionHandshaker perMessageDeflateClientExtensionHandshaker =
+						new PerMessageDeflateClientExtensionHandshaker(6, ZlibCodecFactory.isSupportingWindowSizeAndMemLevel(),
+								MAX_WINDOW_SIZE, websocketClientSpec.compressionAllowClientNoContext(),
+								websocketClientSpec.compressionRequestedServerNoContext());
+				addHandlerFirst(NettyPipeline.WsCompressionHandler,
+						new WebSocketClientExtensionHandler(
+								perMessageDeflateClientExtensionHandshaker,
+								new DeflateFrameClientExtensionHandshaker(false),
+								new DeflateFrameClientExtensionHandshaker(true)));
 			}
 
 			if (log.isDebugEnabled()) {

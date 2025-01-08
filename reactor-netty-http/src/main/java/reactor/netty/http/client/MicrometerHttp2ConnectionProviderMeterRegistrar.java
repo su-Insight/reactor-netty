@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021-2022 VMware, Inc. or its affiliates, All Rights Reserved.
+ * Copyright (c) 2021-2023 VMware, Inc. or its affiliates, All Rights Reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -18,28 +18,21 @@ package reactor.netty.http.client;
 import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.Meter;
 import io.micrometer.core.instrument.Tags;
-import reactor.netty.Metrics;
 import reactor.netty.internal.shaded.reactor.pool.InstrumentedPool;
 
 import java.net.SocketAddress;
 
-import static reactor.netty.Metrics.ACTIVE_CONNECTIONS;
-import static reactor.netty.Metrics.ACTIVE_STREAMS;
-import static reactor.netty.Metrics.CONNECTION_PROVIDER_PREFIX;
-import static reactor.netty.Metrics.ID;
-import static reactor.netty.Metrics.IDLE_CONNECTIONS;
-import static reactor.netty.Metrics.NAME;
-import static reactor.netty.Metrics.PENDING_STREAMS;
 import static reactor.netty.Metrics.REGISTRY;
-import static reactor.netty.Metrics.REMOTE_ADDRESS;
+import static reactor.netty.http.client.Http2ConnectionProviderMeters.ACTIVE_CONNECTIONS;
+import static reactor.netty.http.client.Http2ConnectionProviderMeters.ACTIVE_STREAMS;
+import static reactor.netty.http.client.Http2ConnectionProviderMeters.Http2ConnectionProviderMetersTags.ID;
+import static reactor.netty.http.client.Http2ConnectionProviderMeters.Http2ConnectionProviderMetersTags.NAME;
+import static reactor.netty.http.client.Http2ConnectionProviderMeters.Http2ConnectionProviderMetersTags.REMOTE_ADDRESS;
+import static reactor.netty.http.client.Http2ConnectionProviderMeters.IDLE_CONNECTIONS;
+import static reactor.netty.http.client.Http2ConnectionProviderMeters.PENDING_STREAMS;
+import static reactor.netty.Metrics.formatSocketAddress;
 
 final class MicrometerHttp2ConnectionProviderMeterRegistrar {
-	static final String ACTIVE_CONNECTIONS_DESCRIPTION =
-			"The number of the connections that have been successfully acquired and are in active use";
-	static final String ACTIVE_STREAMS_DESCRIPTION = "The number of the active HTTP/2 streams";
-	static final String IDLE_CONNECTIONS_DESCRIPTION = "The number of the idle connections";
-	static final String PENDING_STREAMS_DESCRIPTION =
-			"The number of requests that are waiting for opening HTTP/2 stream";
 
 	static final MicrometerHttp2ConnectionProviderMeterRegistrar INSTANCE =
 			new MicrometerHttp2ConnectionProviderMeterRegistrar();
@@ -48,37 +41,33 @@ final class MicrometerHttp2ConnectionProviderMeterRegistrar {
 	}
 
 	void registerMetrics(String poolName, String id, SocketAddress remoteAddress, InstrumentedPool.PoolMetrics metrics) {
-		String addressAsString = Metrics.formatSocketAddress(remoteAddress);
-		Tags tags = Tags.of(ID, id, REMOTE_ADDRESS, addressAsString, NAME, poolName);
+		String addressAsString = formatSocketAddress(remoteAddress);
+		Tags tags = Tags.of(ID.asString(), id, REMOTE_ADDRESS.asString(), addressAsString, NAME.asString(), poolName);
 
-		Gauge.builder(CONNECTION_PROVIDER_PREFIX + ACTIVE_CONNECTIONS, metrics, InstrumentedPool.PoolMetrics::acquiredSize)
-		     .description(ACTIVE_CONNECTIONS_DESCRIPTION)
+		Gauge.builder(ACTIVE_CONNECTIONS.getName(), metrics, InstrumentedPool.PoolMetrics::acquiredSize)
 		     .tags(tags)
 		     .register(REGISTRY);
 
-		Gauge.builder(CONNECTION_PROVIDER_PREFIX + ACTIVE_STREAMS, metrics, poolMetrics -> ((Http2Pool) poolMetrics).activeStreams())
-		     .description(ACTIVE_STREAMS_DESCRIPTION)
+		Gauge.builder(ACTIVE_STREAMS.getName(), metrics, poolMetrics -> ((Http2Pool) poolMetrics).activeStreams())
 		     .tags(tags)
 		     .register(REGISTRY);
 
-		Gauge.builder(CONNECTION_PROVIDER_PREFIX + IDLE_CONNECTIONS, metrics, InstrumentedPool.PoolMetrics::idleSize)
-				.description(IDLE_CONNECTIONS_DESCRIPTION)
-				.tags(tags)
-				.register(REGISTRY);
+		Gauge.builder(IDLE_CONNECTIONS.getName(), metrics, InstrumentedPool.PoolMetrics::idleSize)
+		     .tags(tags)
+		     .register(REGISTRY);
 
-		Gauge.builder(CONNECTION_PROVIDER_PREFIX + PENDING_STREAMS, metrics, InstrumentedPool.PoolMetrics::pendingAcquireSize)
-		     .description(PENDING_STREAMS_DESCRIPTION)
+		Gauge.builder(PENDING_STREAMS.getName(), metrics, InstrumentedPool.PoolMetrics::pendingAcquireSize)
 		     .tags(tags)
 		     .register(REGISTRY);
 	}
 
 	void deRegisterMetrics(String poolName, String id, SocketAddress remoteAddress) {
-		String addressAsString = Metrics.formatSocketAddress(remoteAddress);
-		Tags tags = Tags.of(ID, id, REMOTE_ADDRESS, addressAsString, NAME, poolName);
+		String addressAsString = formatSocketAddress(remoteAddress);
+		Tags tags = Tags.of(ID.asString(), id, REMOTE_ADDRESS.asString(), addressAsString, NAME.asString(), poolName);
 
-		REGISTRY.remove(new Meter.Id(CONNECTION_PROVIDER_PREFIX + ACTIVE_CONNECTIONS, tags, null, null, Meter.Type.GAUGE));
-		REGISTRY.remove(new Meter.Id(CONNECTION_PROVIDER_PREFIX + ACTIVE_STREAMS, tags, null, null, Meter.Type.GAUGE));
-		REGISTRY.remove(new Meter.Id(CONNECTION_PROVIDER_PREFIX + IDLE_CONNECTIONS, tags, null, null, Meter.Type.GAUGE));
-		REGISTRY.remove(new Meter.Id(CONNECTION_PROVIDER_PREFIX + PENDING_STREAMS, tags, null, null, Meter.Type.GAUGE));
+		REGISTRY.remove(new Meter.Id(ACTIVE_CONNECTIONS.getName(), tags, null, null, Meter.Type.GAUGE));
+		REGISTRY.remove(new Meter.Id(ACTIVE_STREAMS.getName(), tags, null, null, Meter.Type.GAUGE));
+		REGISTRY.remove(new Meter.Id(IDLE_CONNECTIONS.getName(), tags, null, null, Meter.Type.GAUGE));
+		REGISTRY.remove(new Meter.Id(PENDING_STREAMS.getName(), tags, null, null, Meter.Type.GAUGE));
 	}
 }

@@ -16,6 +16,7 @@
 package reactor.netty.http.server;
 
 import java.net.SocketAddress;
+import java.time.Duration;
 import java.time.ZonedDateTime;
 import java.util.Optional;
 import java.util.function.BiFunction;
@@ -67,6 +68,8 @@ final class Http2StreamBridgeServerHandler extends ChannelDuplexHandler implemen
 	final ConnectionObserver                                      listener;
 	final BiFunction<? super Mono<Void>, ? super Connection, ? extends Mono<Void>>
 	                                                              mapHandle;
+	final Duration                                                readTimeout;
+	final Duration                                                requestTimeout;
 
 	SocketAddress remoteAddress;
 
@@ -85,7 +88,9 @@ final class Http2StreamBridgeServerHandler extends ChannelDuplexHandler implemen
 			@Nullable BiFunction<ConnectionInfo, HttpRequest, ConnectionInfo> forwardedHeaderHandler,
 			HttpMessageLogFactory httpMessageLogFactory,
 			ConnectionObserver listener,
-			@Nullable BiFunction<? super Mono<Void>, ? super Connection, ? extends Mono<Void>> mapHandle) {
+			@Nullable BiFunction<? super Mono<Void>, ? super Connection, ? extends Mono<Void>> mapHandle,
+			@Nullable Duration readTimeout,
+			@Nullable Duration requestTimeout) {
 		this.compress = compress;
 		this.cookieDecoder = decoder;
 		this.cookieEncoder = encoder;
@@ -94,6 +99,8 @@ final class Http2StreamBridgeServerHandler extends ChannelDuplexHandler implemen
 		this.httpMessageLogFactory = httpMessageLogFactory;
 		this.listener = listener;
 		this.mapHandle = mapHandle;
+		this.readTimeout = readTimeout;
+		this.requestTimeout = requestTimeout;
 	}
 
 	@Override
@@ -137,6 +144,8 @@ final class Http2StreamBridgeServerHandler extends ChannelDuplexHandler implemen
 						httpMessageLogFactory,
 						true,
 						mapHandle,
+						readTimeout,
+						requestTimeout,
 						secured,
 						timestamp);
 			}

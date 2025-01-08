@@ -19,7 +19,7 @@ import java.util.function.Supplier;
 
 /**
  * A configuration builder to fine tune the {@code HttpCodec} (or more precisely
- * the settings for the decoder)
+ * the settings for the decoder).
  *
  * @author Violeta Georgieva
  */
@@ -27,6 +27,12 @@ public abstract class HttpDecoderSpec<T extends HttpDecoderSpec<T>> implements S
 
 	public static final int DEFAULT_MAX_INITIAL_LINE_LENGTH             = 4096;
 	public static final int DEFAULT_MAX_HEADER_SIZE                     = 8192;
+	/**
+	 * Default max chunk size.
+	 *
+	 * @deprecated as of 1.1.0. This will be removed in 2.0.0 as Netty 5 does not support this configuration.
+	 */
+	@Deprecated
 	public static final int DEFAULT_MAX_CHUNK_SIZE                      = 8192;
 	public static final boolean DEFAULT_VALIDATE_HEADERS                = true;
 	public static final int DEFAULT_INITIAL_BUFFER_SIZE                 = 128;
@@ -94,7 +100,9 @@ public abstract class HttpDecoderSpec<T extends HttpDecoderSpec<T>> implements S
 	 *
 	 * @param value the value for the maximum chunk size (strictly positive)
 	 * @return this option builder for further configuration
+	 * @deprecated as of 1.1.0. This will be removed in 2.0.0 as Netty 5 does not support this configuration.
 	 */
+	@Deprecated
 	public T maxChunkSize(int value) {
 		if (value <= 0) {
 			throw new IllegalArgumentException("maxChunkSize must be strictly positive");
@@ -107,7 +115,9 @@ public abstract class HttpDecoderSpec<T extends HttpDecoderSpec<T>> implements S
 	 * Return the configured maximum chunk size that can be decoded for the HTTP request.
 	 *
 	 * @return the configured maximum chunk size that can be decoded for the HTTP request
+	 * @deprecated as of 1.1.0. This will be removed in 2.0.0 as Netty 5 does not support this configuration.
 	 */
+	@Deprecated
 	public int maxChunkSize() {
 		return maxChunkSize;
 	}

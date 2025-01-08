@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021-2022 VMware, Inc. or its affiliates, All Rights Reserved.
+ * Copyright (c) 2021-2024 VMware, Inc. or its affiliates, All Rights Reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -378,7 +378,7 @@ final class Http2Pool implements InstrumentedPool<Connection>, InstrumentedPool.
 						borrower.fail(new PoolShutdownException());
 						return;
 					}
-					borrower.stopPendingCountdown();
+					borrower.stopPendingCountdown(true);
 					if (log.isDebugEnabled()) {
 						log.debug(format(slot.connection.channel(), "Channel activated"));
 					}
@@ -422,7 +422,7 @@ final class Http2Pool implements InstrumentedPool<Connection>, InstrumentedPool.
 								borrower.fail(new PoolShutdownException());
 								return;
 							}
-							borrower.stopPendingCountdown();
+							borrower.stopPendingCountdown(true);
 							Mono<Connection> allocator = poolConfig.allocator();
 							Mono<Connection> primary =
 									allocator.doOnEach(sig -> {
@@ -619,6 +619,8 @@ final class Http2Pool implements InstrumentedPool<Connection>, InstrumentedPool.
 	}
 
 	/**
+	 * Adds a new {@link Borrower} to the queue.
+	 *
 	 * @param borrower a new {@link Borrower} to add to the queue and later either serve or consider pending
 	 */
 	void pendingOffer(Borrower borrower) {
@@ -729,6 +731,8 @@ final class Http2Pool implements InstrumentedPool<Connection>, InstrumentedPool.
 		final CoreSubscriber<? super Http2PooledRef> actual;
 		final Http2Pool pool;
 
+		long pendingAcquireStart;
+
 		Disposable timeoutTask;
 
 		Borrower(CoreSubscriber<? super Http2PooledRef> actual, Http2Pool pool, Duration acquireTimeout) {
@@ -740,7 +744,7 @@ final class Http2Pool implements InstrumentedPool<Connection>, InstrumentedPool.
 
 		@Override
 		public void cancel() {
-			stopPendingCountdown();
+			stopPendingCountdown(true); // this is not failure, the subscription was canceled
 			if (compareAndSet(false, true)) {
 				pool.cancelAcquire(this);
 			}
@@ -757,6 +761,7 @@ final class Http2Pool implements InstrumentedPool<Connection>, InstrumentedPool.
 				int permits = pool.poolConfig.allocationStrategy().estimatePermitCount();
 				int pending = pool.pendingSize;
 				if (!acquireTimeout.isZero() && permits + estimateStreamsCount <= pending) {
+					pendingAcquireStart = pool.clock.millis();
 					timeoutTask = pool.poolConfig.pendingAcquireTimer().apply(this, acquireTimeout);
 				}
 				pool.doAcquire(this);
@@ -766,6 +771,8 @@ final class Http2Pool implements InstrumentedPool<Connection>, InstrumentedPool.
 		@Override
 		public void run() {
 			if (compareAndSet(false, true)) {
+				// this is failure, a timeout was observed
+				stopPendingCountdown(false);
 				pool.cancelAcquire(Http2Pool.Borrower.this);
 				actual.onError(new PoolAcquireTimeoutException(acquireTimeout));
 			}
@@ -808,13 +815,21 @@ final class Http2Pool implements InstrumentedPool<Connection>, InstrumentedPool.
 		}
 
 		void fail(Throwable error) {
-			stopPendingCountdown();
+			stopPendingCountdown(false);
 			if (!get()) {
 				actual.onError(error);
 			}
 		}
 
-		void stopPendingCountdown() {
+		void stopPendingCountdown(boolean success) {
+			if (!timeoutTask.isDisposed()) {
+				if (success) {
+					pool.poolConfig.metricsRecorder().recordPendingSuccessAndLatency(pool.clock.millis() - pendingAcquireStart);
+				}
+				else {
+					pool.poolConfig.metricsRecorder().recordPendingFailureAndLatency(pool.clock.millis() - pendingAcquireStart);
+				}
+			}
 			timeoutTask.dispose();
 		}
 	}
@@ -989,7 +1004,8 @@ final class Http2Pool implements InstrumentedPool<Connection>, InstrumentedPool.
 		@Nullable
 		ChannelHandlerContext http2FrameCodecCtx() {
 			ChannelHandlerContext ctx = http2FrameCodecCtx;
-			if (ctx != null && !ctx.isRemoved()) {
+			// ChannelHandlerContext.isRemoved is only meant to be called from within the EventLoop
+			if (ctx != null && connection.channel().eventLoop().inEventLoop() && !ctx.isRemoved()) {
 				return ctx;
 			}
 			ctx = connection.channel().pipeline().context(Http2FrameCodec.class);
@@ -1000,7 +1016,8 @@ final class Http2Pool implements InstrumentedPool<Connection>, InstrumentedPool.
 		@Nullable
 		ChannelHandlerContext http2MultiplexHandlerCtx() {
 			ChannelHandlerContext ctx = http2MultiplexHandlerCtx;
-			if (ctx != null && !ctx.isRemoved()) {
+			// ChannelHandlerContext.isRemoved is only meant to be called from within the EventLoop
+			if (ctx != null && connection.channel().eventLoop().inEventLoop() && !ctx.isRemoved()) {
 				return ctx;
 			}
 			ctx = connection.channel().pipeline().context(Http2MultiplexHandler.class);
@@ -1011,7 +1028,8 @@ final class Http2Pool implements InstrumentedPool<Connection>, InstrumentedPool.
 		@Nullable
 		ChannelHandlerContext h2cUpgradeHandlerCtx() {
 			ChannelHandlerContext ctx = h2cUpgradeHandlerCtx;
-			if (ctx != null && !ctx.isRemoved()) {
+			// ChannelHandlerContext.isRemoved is only meant to be called from within the EventLoop
+			if (ctx != null && connection.channel().eventLoop().inEventLoop() && !ctx.isRemoved()) {
 				return ctx;
 			}
 			ctx = connection.channel().pipeline().context(NettyPipeline.H2CUpgradeHandler);

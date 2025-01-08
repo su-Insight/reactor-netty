@@ -17,6 +17,7 @@ package reactor.netty.http.server;
 
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.ByteBufHolder;
+import io.netty.channel.Channel;
 import io.netty.channel.ChannelDuplexHandler;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelPromise;
@@ -30,12 +31,18 @@ import reactor.util.Logger;
 import reactor.util.Loggers;
 import reactor.util.annotation.Nullable;
 
+import java.net.SocketAddress;
 import java.time.Duration;
+import java.util.Collections;
+import java.util.HashSet;
+import java.util.Set;
 import java.util.function.Function;
 
 import static reactor.netty.ReactorNetty.format;
 
 /**
+ * {@link ChannelDuplexHandler} for handling {@link HttpServer} metrics.
+ *
  * @author Violeta Georgieva
  * @since 1.0.8
  */
@@ -44,6 +51,7 @@ abstract class AbstractHttpServerMetricsHandler extends ChannelDuplexHandler {
 	private static final Logger log = Loggers.getLogger(AbstractHttpServerMetricsHandler.class);
 
 	boolean channelActivated;
+	boolean channelOpened;
 
 	long dataReceived;
 
@@ -53,18 +61,24 @@ abstract class AbstractHttpServerMetricsHandler extends ChannelDuplexHandler {
 
 	long dataSentTime;
 
+	final Function<String, String> methodTagValue;
 	final Function<String, String> uriTagValue;
 
-	protected AbstractHttpServerMetricsHandler(@Nullable Function<String, String> uriTagValue) {
+	protected AbstractHttpServerMetricsHandler(
+			@Nullable Function<String, String> methodTagValue,
+			@Nullable Function<String, String> uriTagValue) {
+		this.methodTagValue = methodTagValue == null ? DEFAULT_METHOD_TAG_VALUE : methodTagValue;
 		this.uriTagValue = uriTagValue;
 	}
 
 	protected AbstractHttpServerMetricsHandler(AbstractHttpServerMetricsHandler copy) {
 		this.channelActivated = copy.channelActivated;
+		this.channelOpened = copy.channelOpened;
 		this.dataReceived = copy.dataReceived;
 		this.dataReceivedTime = copy.dataReceivedTime;
 		this.dataSent = copy.dataSent;
 		this.dataSentTime = copy.dataSentTime;
+		this.methodTagValue = copy.methodTagValue;
 		this.uriTagValue = copy.uriTagValue;
 	}
 
@@ -75,13 +89,15 @@ abstract class AbstractHttpServerMetricsHandler extends ChannelDuplexHandler {
 		// not our MicrometerHttpServerMetricsRecorder. See HttpServerConfig class.
 		if (!(ctx.channel() instanceof Http2StreamChannel) && recorder() instanceof MicrometerHttpServerMetricsRecorder) {
 			try {
+				// Always use the real connection local address without any proxy information
+				channelOpened = true;
 				recorder().recordServerConnectionOpened(ctx.channel().localAddress());
 			}
 			catch (RuntimeException e) {
+				// Allow request-response exchange to continue, unaffected by metrics problem
 				if (log.isWarnEnabled()) {
 					log.warn(format(ctx.channel(), "Exception caught while recording metrics."), e);
 				}
-				// Allow request-response exchange to continue, unaffected by metrics problem
 			}
 		}
 		ctx.fireChannelActive();
@@ -91,19 +107,22 @@ abstract class AbstractHttpServerMetricsHandler extends ChannelDuplexHandler {
 	public void channelInactive(ChannelHandlerContext ctx) {
 		if (!(ctx.channel() instanceof Http2StreamChannel) && recorder() instanceof MicrometerHttpServerMetricsRecorder) {
 			try {
-				recorder().recordServerConnectionClosed(ctx.channel().localAddress());
+				// Always use the real connection local address without any proxy information
+				if (channelOpened) {
+					channelOpened = false;
+					recorder().recordServerConnectionClosed(ctx.channel().localAddress());
+				}
 			}
 			catch (RuntimeException e) {
+				// Allow request-response exchange to continue, unaffected by metrics problem
 				if (log.isWarnEnabled()) {
 					log.warn(format(ctx.channel(), "Exception caught while recording metrics."), e);
 				}
-				// Allow request-response exchange to continue, unaffected by metrics problem
 			}
 		}
-		ChannelOperations<?, ?> channelOps = ChannelOperations.get(ctx.channel());
-		if (channelOps instanceof HttpServerOperations) {
-			recordInactiveConnectionOrStream((HttpServerOperations) channelOps);
-		}
+
+		recordInactiveConnectionOrStream(ctx.channel());
+
 		ctx.fireChannelInactive();
 	}
 
@@ -113,10 +132,17 @@ abstract class AbstractHttpServerMetricsHandler extends ChannelDuplexHandler {
 		try {
 			if (msg instanceof HttpResponse) {
 				if (((HttpResponse) msg).status().equals(HttpResponseStatus.CONTINUE)) {
+					//"FutureReturnValueIgnored" this is deliberate
+					ctx.write(msg, promise);
 					return;
 				}
 
-				dataSentTime = System.nanoTime();
+				ChannelOperations<?, ?> channelOps = ChannelOperations.get(ctx.channel());
+				if (channelOps instanceof HttpServerOperations) {
+					HttpServerOperations ops = (HttpServerOperations) channelOps;
+					startWrite(ops, uriTagValue == null ? ops.path : uriTagValue.apply(ops.path),
+							methodTagValue.apply(ops.method().name()), ops.status().codeAsText().toString());
+				}
 			}
 
 			dataSent += extractProcessedDataFromBuffer(msg);
@@ -128,26 +154,27 @@ abstract class AbstractHttpServerMetricsHandler extends ChannelDuplexHandler {
 						HttpServerOperations ops = (HttpServerOperations) channelOps;
 						try {
 							recordWrite(ops, uriTagValue == null ? ops.path : uriTagValue.apply(ops.path),
-									ops.method().name(), ops.status().codeAsText().toString());
+									methodTagValue.apply(ops.method().name()), ops.status().codeAsText().toString());
 						}
 						catch (RuntimeException e) {
+							// Allow request-response exchange to continue, unaffected by metrics problem
 							if (log.isWarnEnabled()) {
 								log.warn(format(ctx.channel(), "Exception caught while recording metrics."), e);
 							}
-							// Allow request-response exchange to continue, unaffected by metrics problem
 						}
-						recordInactiveConnectionOrStream(ops);
 					}
+
+					recordInactiveConnectionOrStream(ctx.channel());
 
 					dataSent = 0;
 				});
 			}
 		}
 		catch (RuntimeException e) {
+			// Allow request-response exchange to continue, unaffected by metrics problem
 			if (log.isWarnEnabled()) {
 				log.warn(format(ctx.channel(), "Exception caught while recording metrics."), e);
 			}
-			// Allow request-response exchange to continue, unaffected by metrics problem
 		}
 		finally {
 			//"FutureReturnValueIgnored" this is deliberate
@@ -159,17 +186,20 @@ abstract class AbstractHttpServerMetricsHandler extends ChannelDuplexHandler {
 	public void channelRead(ChannelHandlerContext ctx, Object msg) {
 		try {
 			if (msg instanceof HttpRequest) {
-				dataReceivedTime = System.nanoTime();
 				ChannelOperations<?, ?> channelOps = ChannelOperations.get(ctx.channel());
 				if (channelOps instanceof HttpServerOperations) {
-					channelActivated = true;
 					HttpServerOperations ops = (HttpServerOperations) channelOps;
-					if (ops.isHttp2()) {
-						recordOpenStream(ops);
-					}
-					else {
-						recordActiveConnection(ops);
-					}
+					startRead(ops, uriTagValue == null ? ops.path : uriTagValue.apply(ops.path), methodTagValue.apply(ops.method().name()));
+				}
+
+				channelActivated = true;
+				if (ctx.channel() instanceof Http2StreamChannel) {
+					// Always use the real connection local address without any proxy information
+					recordOpenStream(ctx.channel().localAddress());
+				}
+				else {
+					// Always use the real connection local address without any proxy information
+					recordActiveConnection(ctx.channel().localAddress());
 				}
 			}
 
@@ -179,17 +209,17 @@ abstract class AbstractHttpServerMetricsHandler extends ChannelDuplexHandler {
 				ChannelOperations<?, ?> channelOps = ChannelOperations.get(ctx.channel());
 				if (channelOps instanceof HttpServerOperations) {
 					HttpServerOperations ops = (HttpServerOperations) channelOps;
-					recordRead(ops, uriTagValue == null ? ops.path : uriTagValue.apply(ops.path), ops.method().name());
+					recordRead(ops, uriTagValue == null ? ops.path : uriTagValue.apply(ops.path), methodTagValue.apply(ops.method().name()));
 				}
 
 				dataReceived = 0;
 			}
 		}
 		catch (RuntimeException e) {
+			// Allow request-response exchange to continue, unaffected by metrics problem
 			if (log.isWarnEnabled()) {
 				log.warn(format(ctx.channel(), "Exception caught while recording metrics."), e);
 			}
-			// Allow request-response exchange to continue, unaffected by metrics problem
 		}
 
 		ctx.fireChannelRead(msg);
@@ -206,16 +236,14 @@ abstract class AbstractHttpServerMetricsHandler extends ChannelDuplexHandler {
 			}
 		}
 		catch (RuntimeException e) {
+			// Allow request-response exchange to continue, unaffected by metrics problem
 			if (log.isWarnEnabled()) {
 				log.warn(format(ctx.channel(), "Exception caught while recording metrics."), e);
 			}
-			// Allow request-response exchange to continue, unaffected by metrics problem
 		}
 
 		ctx.fireExceptionCaught(cause);
 	}
-
-	protected abstract HttpServerMetricsRecorder recorder();
 
 	private long extractProcessedDataFromBuffer(Object msg) {
 		if (msg instanceof ByteBufHolder) {
@@ -226,6 +254,8 @@ abstract class AbstractHttpServerMetricsHandler extends ChannelDuplexHandler {
 		}
 		return 0;
 	}
+
+	protected abstract HttpServerMetricsRecorder recorder();
 
 	protected void recordException(HttpServerOperations ops, String path) {
 		// Always take the remote address from the operations in order to consider proxy information
@@ -257,39 +287,66 @@ abstract class AbstractHttpServerMetricsHandler extends ChannelDuplexHandler {
 		recorder().recordDataSent(ops.remoteSocketAddress(), path, dataSent);
 	}
 
-	protected void recordActiveConnection(HttpServerOperations ops) {
-		recorder().recordServerConnectionActive(ops.hostSocketAddress());
+	protected void recordActiveConnection(SocketAddress localAddress) {
+		recorder().recordServerConnectionActive(localAddress);
 	}
 
-	protected void recordInactiveConnection(HttpServerOperations ops) {
-		recorder().recordServerConnectionInactive(ops.hostSocketAddress());
+	protected void recordInactiveConnection(SocketAddress localAddress) {
+		recorder().recordServerConnectionInactive(localAddress);
 	}
 
-	protected void recordOpenStream(HttpServerOperations ops) {
-		recorder().recordStreamOpened(ops.hostSocketAddress());
+	protected void recordOpenStream(SocketAddress localAddress) {
+		recorder().recordStreamOpened(localAddress);
 	}
 
-	protected void recordClosedStream(HttpServerOperations ops) {
-		recorder().recordStreamClosed(ops.hostSocketAddress());
+	protected void recordClosedStream(SocketAddress localAddress) {
+		recorder().recordStreamClosed(localAddress);
 	}
 
-	void recordInactiveConnectionOrStream(HttpServerOperations ops) {
+	protected void startRead(HttpServerOperations ops, String path, String method) {
+		dataReceivedTime = System.nanoTime();
+	}
+
+	protected void startWrite(HttpServerOperations ops, String path, String method, String status) {
+		dataSentTime = System.nanoTime();
+	}
+
+	void recordInactiveConnectionOrStream(Channel channel) {
 		if (channelActivated) {
 			channelActivated = false;
 			try {
-				if (ops.isHttp2()) {
-					recordClosedStream(ops);
+				if (channel instanceof Http2StreamChannel) {
+					// Always use the real connection local address without any proxy information
+					recordClosedStream(channel.localAddress());
 				}
 				else {
-					recordInactiveConnection(ops);
+					// Always use the real connection local address without any proxy information
+					recordInactiveConnection(channel.localAddress());
 				}
 			}
 			catch (RuntimeException e) {
-				if (log.isWarnEnabled()) {
-					log.warn(format(ops.channel(), "Exception caught while recording metrics."), e);
-				}
 				// Allow request-response exchange to continue, unaffected by metrics problem
+				if (log.isWarnEnabled()) {
+					log.warn(format(channel, "Exception caught while recording metrics."), e);
+				}
 			}
 		}
 	}
+
+	static final Set<String> STANDARD_METHODS;
+	static {
+		Set<String> standardMethods = new HashSet<>();
+		standardMethods.add("GET");
+		standardMethods.add("HEAD");
+		standardMethods.add("POST");
+		standardMethods.add("PUT");
+		standardMethods.add("PATCH");
+		standardMethods.add("DELETE");
+		standardMethods.add("OPTIONS");
+		standardMethods.add("TRACE");
+		standardMethods.add("CONNECT");
+		STANDARD_METHODS = Collections.unmodifiableSet(standardMethods);
+	}
+	static final String UNKNOWN_METHOD = "UNKNOWN";
+	static final Function<String, String> DEFAULT_METHOD_TAG_VALUE = m -> STANDARD_METHODS.contains(m) ? m : UNKNOWN_METHOD;
 }

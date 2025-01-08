@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011-2022 VMware, Inc. or its affiliates, All Rights Reserved.
+ * Copyright (c) 2011-2024 VMware, Inc. or its affiliates, All Rights Reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -58,13 +58,13 @@ import reactor.netty.http.logging.HttpMessageLogFactory;
 import reactor.netty.http.logging.ReactorNettyHttpMessageLogFactory;
 import reactor.netty.http.websocket.WebsocketInbound;
 import reactor.netty.http.websocket.WebsocketOutbound;
+import reactor.netty.internal.util.Metrics;
 import reactor.netty.resources.ConnectionProvider;
 import reactor.netty.tcp.SslProvider;
 import reactor.netty.tcp.TcpClient;
 import reactor.netty.transport.ClientTransport;
 import reactor.util.Logger;
 import reactor.util.Loggers;
-import reactor.util.Metrics;
 import reactor.util.annotation.Nullable;
 
 /**
@@ -109,12 +109,12 @@ public abstract class HttpClient extends ClientTransport<HttpClient, HttpClientC
 	public static final String USER_AGENT = String.format("ReactorNetty/%s", reactorNettyVersion());
 
 	/**
-	 * A URI configuration
+	 * A URI configuration.
 	 */
 	public interface UriConfiguration<S extends UriConfiguration<?>> {
 
 		/**
-		 * Configure URI to use for this request/response
+		 * Configure URI to use for this request/response.
 		 *
 		 * @param uri target URI, if starting with "/" it will be prepended with
 		 * {@link #baseUrl(String)} when available
@@ -124,7 +124,7 @@ public abstract class HttpClient extends ClientTransport<HttpClient, HttpClientC
 		S uri(String uri);
 
 		/**
-		 * Configure URI to use for this request/response on subscribe
+		 * Configure URI to use for this request/response on subscribe.
 		 *
 		 * @param uri target URI, if starting with "/" it will be prepended with
 		 * {@link #baseUrl(String)} when available
@@ -563,7 +563,9 @@ public abstract class HttpClient extends ClientTransport<HttpClient, HttpClientC
 	 * @param cookieBuilder the header {@link Consumer} to invoke before requesting
 	 *
 	 * @return a new {@link HttpClient}
+	 * @deprecated as of 1.1.0. Use {@link #cookie(Cookie)} for configuring cookies. This will be removed in 2.0.0.
 	 */
+	@Deprecated
 	public final HttpClient cookie(String name, Consumer<? super Cookie> cookieBuilder) {
 		Objects.requireNonNull(name, "name");
 		Objects.requireNonNull(cookieBuilder, "cookieBuilder");
@@ -575,12 +577,14 @@ public abstract class HttpClient extends ClientTransport<HttpClient, HttpClientC
 	/**
 	 * Configure the
 	 * {@link ClientCookieEncoder}, {@link ClientCookieDecoder} will be
-	 * chosen based on the encoder
+	 * chosen based on the encoder.
 	 *
 	 * @param encoder the preferred ClientCookieEncoder
 	 *
 	 * @return a new {@link HttpClient}
+	 * @deprecated as of 1.1.0. This will be removed in 2.0.0 as Netty 5 supports only strict validation.
 	 */
+	@Deprecated
 	public final HttpClient cookieCodec(ClientCookieEncoder encoder) {
 		Objects.requireNonNull(encoder, "encoder");
 		ClientCookieDecoder decoder = encoder == ClientCookieEncoder.LAX ?
@@ -590,13 +594,15 @@ public abstract class HttpClient extends ClientTransport<HttpClient, HttpClientC
 
 	/**
 	 * Configure the
-	 * {@link ClientCookieEncoder} and {@link ClientCookieDecoder}
+	 * {@link ClientCookieEncoder} and {@link ClientCookieDecoder}.
 	 *
 	 * @param encoder the preferred ClientCookieEncoder
 	 * @param decoder the preferred ClientCookieDecoder
 	 *
 	 * @return a new {@link HttpClient}
+	 * @deprecated as of 1.1.0. This will be removed in 2.0.0 as Netty 5 supports only strict validation.
 	 */
+	@Deprecated
 	public final HttpClient cookieCodec(ClientCookieEncoder encoder, ClientCookieDecoder decoder) {
 		Objects.requireNonNull(encoder, "encoder");
 		Objects.requireNonNull(decoder, "decoder");
@@ -1060,7 +1066,7 @@ public abstract class HttpClient extends ClientTransport<HttpClient, HttpClientC
 	}
 
 	/**
-	 * Apply HTTP/2 configuration
+	 * Apply HTTP/2 configuration.
 	 *
 	 * @param http2Settings configures {@link Http2SettingsSpec} before requesting
 	 * @return a new {@link HttpClient}
@@ -1180,10 +1186,10 @@ public abstract class HttpClient extends ClientTransport<HttpClient, HttpClientC
 	 */
 	public final HttpClient metrics(boolean enable, Function<String, String> uriTagValue) {
 		if (enable) {
-			if (!Metrics.isInstrumentationAvailable()) {
+			if (!Metrics.isMicrometerAvailable() && !Metrics.isTracingAvailable()) {
 				throw new UnsupportedOperationException(
-						"To enable metrics, you must add the dependency `io.micrometer:micrometer-core`" +
-								" to the class path first");
+						"To enable metrics, you must add the dependencies to `io.micrometer:micrometer-core`" +
+								" and `io.micrometer:micrometer-tracing` to the class path first");
 			}
 			if (uriTagValue == Function.<String>identity()) {
 				log.debug("Metrics are enabled with [uriTagValue=Function#identity]. " +
@@ -1247,7 +1253,7 @@ public abstract class HttpClient extends ClientTransport<HttpClient, HttpClientC
 	}
 
 	/**
-	 * Removes any previously applied SSL configuration customization
+	 * Removes any previously applied SSL configuration customization.
 	 *
 	 * @return a new {@link HttpClient}
 	 */
@@ -1283,6 +1289,14 @@ public abstract class HttpClient extends ClientTransport<HttpClient, HttpClientC
 		return request(HttpMethod.PATCH);
 	}
 
+	/**
+	 * The port to which this client should connect.
+	 * If a port is not specified, the default port {@code 80} is used.
+	 * <p><strong>Note:</strong> The port can be specified also with {@code PORT} environment variable.
+	 *
+	 * @param port the port to connect to
+	 * @return a new {@link HttpClient}
+	 */
 	@Override
 	public final HttpClient port(int port) {
 		return super.port(port);
@@ -1377,6 +1391,8 @@ public abstract class HttpClient extends ClientTransport<HttpClient, HttpClientC
 	 * <ul>
 	 *     <li>{@code 10} seconds handshake timeout unless
 	 *     the environment property {@code reactor.netty.tcp.sslHandshakeTimeout} is set</li>
+	 *     <li>{@code 3} seconds close_notify flush timeout</li>
+	 *     <li>{@code 0} second close_notify read timeout</li>
 	 *     <li>hostname verification enabled</li>
 	 * </ul>
 	 * </p>
@@ -1399,6 +1415,8 @@ public abstract class HttpClient extends ClientTransport<HttpClient, HttpClientC
 	 * <ul>
 	 *     <li>{@code 10} seconds handshake timeout unless the passed builder sets another configuration or
 	 *     the environment property {@code reactor.netty.tcp.sslHandshakeTimeout} is set</li>
+	 *     <li>{@code 3} seconds close_notify flush timeout</li>
+	 *     <li>{@code 0} second close_notify read timeout</li>
 	 *     <li>hostname verification enabled</li>
 	 * </ul>
 	 * </p>

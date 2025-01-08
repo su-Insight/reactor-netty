@@ -35,6 +35,7 @@ import io.netty.resolver.dns.DnsAddressResolverGroup;
 import reactor.netty.ChannelPipelineConfigurer;
 import reactor.netty.Connection;
 import reactor.netty.ConnectionObserver;
+import reactor.netty.channel.MicrometerChannelMetricsRecorder;
 import reactor.netty.resources.ConnectionProvider;
 import reactor.netty.resources.LoopResources;
 import reactor.netty.internal.util.MapUtils;
@@ -59,7 +60,7 @@ public abstract class ClientTransportConfig<CONF extends TransportConfig> extend
 	}
 
 	/**
-	 * Return the {@link ConnectionProvider}
+	 * Return the {@link ConnectionProvider}.
 	 *
 	 * @return the {@link ConnectionProvider}
 	 */
@@ -68,7 +69,7 @@ public abstract class ClientTransportConfig<CONF extends TransportConfig> extend
 	}
 
 	/**
-	 * Return the configured callback or null
+	 * Return the configured callback or null.
 	 *
 	 * @return the configured callback or null
 	 */
@@ -78,7 +79,7 @@ public abstract class ClientTransportConfig<CONF extends TransportConfig> extend
 	}
 
 	/**
-	 * Return the configured callback or null
+	 * Return the configured callback or null.
 	 *
 	 * @return the configured callback or null
 	 */
@@ -88,7 +89,7 @@ public abstract class ClientTransportConfig<CONF extends TransportConfig> extend
 	}
 
 	/**
-	 * Return the configured callback or null
+	 * Return the configured callback or null.
 	 *
 	 * @return the configured callback or null
 	 */
@@ -98,7 +99,7 @@ public abstract class ClientTransportConfig<CONF extends TransportConfig> extend
 	}
 
 	/**
-	 * Return true if that {@link ClientTransportConfig} is configured with a proxy
+	 * Return true if that {@link ClientTransportConfig} is configured with a proxy.
 	 *
 	 * @return true if that {@link ClientTransportConfig} is configured with a proxy
 	 */
@@ -107,7 +108,7 @@ public abstract class ClientTransportConfig<CONF extends TransportConfig> extend
 	}
 
 	/**
-	 * Return the configured {@link NameResolverProvider} or null
+	 * Return the configured {@link NameResolverProvider} or null.
 	 *
 	 * @return the configured {@link NameResolverProvider} or null
 	 */
@@ -117,7 +118,7 @@ public abstract class ClientTransportConfig<CONF extends TransportConfig> extend
 	}
 
 	/**
-	 * Return the {@link ProxyProvider} if any or null
+	 * Return the {@link ProxyProvider} if any or null.
 	 *
 	 * @return the {@link ProxyProvider} if any or null
 	 */
@@ -127,7 +128,7 @@ public abstract class ClientTransportConfig<CONF extends TransportConfig> extend
 	}
 
 	/**
-	 * Return the remote configured {@link SocketAddress}
+	 * Return the remote configured {@link SocketAddress}.
 	 *
 	 * @return the remote configured {@link SocketAddress}
 	 */
@@ -226,7 +227,12 @@ public abstract class ClientTransportConfig<CONF extends TransportConfig> extend
 	protected AddressResolverGroup<?> resolverInternal() {
 		AddressResolverGroup<?> resolverGroup = resolver != null ? resolver : defaultAddressResolverGroup();
 		if (metricsRecorder != null) {
-			return AddressResolverGroupMetrics.getOrCreate(resolverGroup, metricsRecorder);
+			if (metricsRecorder instanceof MicrometerChannelMetricsRecorder) {
+				return MicrometerAddressResolverGroupMetrics.getOrCreate(resolverGroup, (MicrometerChannelMetricsRecorder) metricsRecorder);
+			}
+			else {
+				return AddressResolverGroupMetrics.getOrCreate(resolverGroup, metricsRecorder);
+			}
 		}
 		else {
 			return resolverGroup;

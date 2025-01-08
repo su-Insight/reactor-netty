@@ -180,7 +180,7 @@ public final class TransportConnector {
 	}
 
 	/**
-	 * Set the channel attributes
+	 * Set the channel attributes.
 	 *
 	 * @param channel the channel
 	 * @param attrs the attributes
@@ -193,7 +193,7 @@ public final class TransportConnector {
 	}
 
 	/**
-	 * Set the channel options
+	 * Set the channel options.
 	 *
 	 * @param channel the channel
 	 * @param options the options
@@ -294,7 +294,7 @@ public final class TransportConnector {
 		return monoChannelPromise;
 	}
 
-	@SuppressWarnings({"unchecked", "FutureReturnValueIgnored"})
+	@SuppressWarnings({"unchecked", "FutureReturnValueIgnored", "try"})
 	static Mono<Channel> doResolveAndConnect(Channel channel, TransportConfig config,
 			SocketAddress remoteAddress, AddressResolverGroup<?> resolverGroup, ContextView contextView) {
 		try {
@@ -326,7 +326,14 @@ public final class TransportConnector {
 				}
 			}
 
-			Future<List<SocketAddress>> resolveFuture = resolver.resolveAll(remoteAddress);
+			Future<List<SocketAddress>> resolveFuture;
+			if (resolver instanceof MicrometerAddressResolverGroupMetrics.MicrometerDelegatingAddressResolver) {
+				resolveFuture = ((MicrometerAddressResolverGroupMetrics.MicrometerDelegatingAddressResolver<SocketAddress>) resolver)
+						.resolveAll(remoteAddress, contextView);
+			}
+			else {
+				resolveFuture = resolver.resolveAll(remoteAddress);
+			}
 
 			if (config instanceof ClientTransportConfig) {
 				final ClientTransportConfig<?> clientTransportConfig = (ClientTransportConfig<?>) config;

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020-2023 VMware, Inc. or its affiliates, All Rights Reserved.
+ * Copyright (c) 2020-2024 VMware, Inc. or its affiliates, All Rights Reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -114,6 +114,7 @@ dependencies {
 
 	//Metrics
 	compileOnly "io.micrometer:micrometer-core:$micrometerVersion"
+	compileOnly "io.micrometer:micrometer-tracing:$micrometerTracingVersion"
 
 	// Logging
 	compileOnly "org.slf4j:slf4j-api:$slf4jVersion"
@@ -139,11 +140,18 @@ dependencies {
 	testImplementation "org.junit.jupiter:junit-jupiter-params:$junitVersion"
 	testImplementation "io.projectreactor.tools:blockhound-junit-platform:$blockHoundVersion"
 	testImplementation "io.micrometer:micrometer-core:$micrometerVersion"
+	testImplementation("io.micrometer:micrometer-tracing-integration-test:$micrometerTracingVersion") {
+		exclude module: "context-propagation"
+	}
+	testImplementation "org.reflections:reflections:$reflectionsVersion"
 
 	testRuntimeOnly "org.junit.platform:junit-platform-launcher:$junitPlatformLauncherVersion"
 	testRuntimeOnly "org.junit.jupiter:junit-jupiter-engine:$junitVersion"
 	testRuntimeOnly "org.slf4j:jcl-over-slf4j:$slf4jVersion"
 	testRuntimeOnly "ch.qos.logback:logback-classic:$logbackVersion"
+
+	// Needed for zstd compression
+	testImplementation "com.github.luben:zstd-jni:$zstdJniVersion"
 
 	// Needed for Brotli compression
 	testImplementation "com.aayushatharva.brotli4j:brotli4j:$brotli4jVersion"

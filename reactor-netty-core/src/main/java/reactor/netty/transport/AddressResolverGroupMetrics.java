@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2022 VMware, Inc. or its affiliates, All Rights Reserved.
+ * Copyright (c) 2019-2023 VMware, Inc. or its affiliates, All Rights Reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -37,9 +37,11 @@ import static reactor.netty.Metrics.ERROR;
 import static reactor.netty.Metrics.SUCCESS;
 
 /**
+ * Metrics related to name resolution.
+ *
  * @author Violeta Georgieva
  */
-final class AddressResolverGroupMetrics<T extends SocketAddress> extends AddressResolverGroup<T> {
+class AddressResolverGroupMetrics<T extends SocketAddress> extends AddressResolverGroup<T> {
 
 	private static final Logger log = Loggers.getLogger(AddressResolverGroupMetrics.class);
 
@@ -55,84 +57,92 @@ final class AddressResolverGroupMetrics<T extends SocketAddress> extends Address
 
 	final ChannelMetricsRecorder recorder;
 
-	private AddressResolverGroupMetrics(AddressResolverGroup<T> resolverGroup, ChannelMetricsRecorder recorder) {
+	AddressResolverGroupMetrics(AddressResolverGroup<T> resolverGroup, ChannelMetricsRecorder recorder) {
 		this.resolverGroup = resolverGroup;
 		this.recorder = recorder;
 	}
 
 	@Override
 	protected AddressResolver<T> newResolver(EventExecutor executor) {
-		AddressResolver<T> resolver = resolverGroup.getResolver(executor);
+		return new DelegatingAddressResolver<>(recorder, resolverGroup.getResolver(executor));
+	}
 
-		return new AddressResolver<T>() {
+	static class DelegatingAddressResolver<T extends SocketAddress> implements AddressResolver<T> {
 
-			@Override
-			public boolean isSupported(SocketAddress address) {
-				return resolver.isSupported(address);
+		final ChannelMetricsRecorder recorder;
+		final AddressResolver<T> resolver;
+
+		DelegatingAddressResolver(ChannelMetricsRecorder recorder, AddressResolver<T> resolver) {
+			this.recorder = recorder;
+			this.resolver = resolver;
+		}
+
+		@Override
+		public boolean isSupported(SocketAddress address) {
+			return resolver.isSupported(address);
+		}
+
+		@Override
+		public boolean isResolved(SocketAddress address) {
+			return resolver.isResolved(address);
+		}
+
+		@Override
+		public Future<T> resolve(SocketAddress address) {
+			return resolveInternal(address, () -> resolver.resolve(address));
+		}
+
+		@Override
+		public Future<T> resolve(SocketAddress address, Promise<T> promise) {
+			return resolveInternal(address, () -> resolver.resolve(address, promise));
+		}
+
+		@Override
+		public Future<List<T>> resolveAll(SocketAddress address) {
+			return resolveAllInternal(address, () -> resolver.resolveAll(address));
+		}
+
+		@Override
+		public Future<List<T>> resolveAll(SocketAddress address, Promise<List<T>> promise) {
+			return resolveAllInternal(address, () -> resolver.resolveAll(address, promise));
+		}
+
+		@Override
+		public void close() {
+			resolver.close();
+		}
+
+		Future<T> resolveInternal(SocketAddress address, Supplier<Future<T>> resolver) {
+			long resolveTimeStart = System.nanoTime();
+			return resolver.get()
+			               .addListener(
+			                   future -> record(resolveTimeStart,
+			                                    future.isSuccess() ? SUCCESS : ERROR,
+			                                    address));
+		}
+
+		Future<List<T>> resolveAllInternal(SocketAddress address, Supplier<Future<List<T>>> resolver) {
+			long resolveTimeStart = System.nanoTime();
+			return resolver.get()
+			               .addListener(
+			                   future -> record(resolveTimeStart,
+			                                    future.isSuccess() ? SUCCESS : ERROR,
+			                                    address));
+		}
+
+		void record(long resolveTimeStart, String status, SocketAddress remoteAddress) {
+			try {
+				recorder.recordResolveAddressTime(
+						remoteAddress,
+						Duration.ofNanos(System.nanoTime() - resolveTimeStart),
+						status);
 			}
-
-			@Override
-			public boolean isResolved(SocketAddress address) {
-				return resolver.isResolved(address);
-			}
-
-			@Override
-			public Future<T> resolve(SocketAddress address) {
-				return resolveInternal(address, () -> resolver.resolve(address));
-			}
-
-			@Override
-			public Future<T> resolve(SocketAddress address, Promise<T> promise) {
-				return resolveInternal(address, () -> resolver.resolve(address, promise));
-			}
-
-			@Override
-			public Future<List<T>> resolveAll(SocketAddress address) {
-				return resolveAllInternal(address, () -> resolver.resolveAll(address));
-			}
-
-			@Override
-			public Future<List<T>> resolveAll(SocketAddress address, Promise<List<T>> promise) {
-				return resolveAllInternal(address, () -> resolver.resolveAll(address, promise));
-			}
-
-			@Override
-			public void close() {
-				resolver.close();
-			}
-
-			Future<T> resolveInternal(SocketAddress address, Supplier<Future<T>> resolver) {
-				long resolveTimeStart = System.nanoTime();
-				return resolver.get()
-				               .addListener(
-				                   future -> record(resolveTimeStart,
-				                                    future.isSuccess() ? SUCCESS : ERROR,
-				                                    address));
-			}
-
-			Future<List<T>> resolveAllInternal(SocketAddress address, Supplier<Future<List<T>>> resolver) {
-				long resolveTimeStart = System.nanoTime();
-				return resolver.get()
-				               .addListener(
-				                   future -> record(resolveTimeStart,
-				                                    future.isSuccess() ? SUCCESS : ERROR,
-				                                    address));
-			}
-
-			void record(long resolveTimeStart, String status, SocketAddress remoteAddress) {
-				try {
-					recorder.recordResolveAddressTime(
-							remoteAddress,
-							Duration.ofNanos(System.nanoTime() - resolveTimeStart),
-							status);
+			catch (RuntimeException e) {
+				if (log.isWarnEnabled()) {
+					log.warn("Exception caught while recording metrics.", e);
 				}
-				catch (RuntimeException e) {
-					if (log.isWarnEnabled()) {
-						log.warn("Exception caught while recording metrics.", e);
-					}
-					// Allow request-response exchange to continue, unaffected by metrics problem
-				}
+				// Allow request-response exchange to continue, unaffected by metrics problem
 			}
-		};
+		}
 	}
 }

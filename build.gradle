@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011-2023 VMware, Inc. or its affiliates, All Rights Reserved.
+ * Copyright (c) 2011-2024 VMware, Inc. or its affiliates, All Rights Reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -23,24 +23,25 @@ buildscript {
 		maven { url "https://repo.spring.io/plugins-release" }
 	}
 	dependencies {
-		classpath 'org.jfrog.buildinfo:build-info-extractor-gradle:4.33.6' //applied in individual submodules
+		classpath 'org.jfrog.buildinfo:build-info-extractor-gradle:4.33.13' //applied in individual submodules
 	}
 }
 
 plugins {
 	id "com.diffplug.spotless" version "6.13.0"
-	id 'org.asciidoctor.jvm.convert' version '3.3.2' apply false
-	id 'org.asciidoctor.jvm.pdf' version '3.3.2' apply false
 	id 'com.google.osdetector' version '1.7.3'
-	id 'org.gradle.test-retry' version '1.5.6'
+	id 'org.gradle.test-retry' version '1.5.8'
 	id 'io.spring.nohttp' version '0.0.11'
 	id 'com.github.johnrengelman.shadow' version '7.1.2' apply false
 	//we now need version of Artifactory gradle plugin deployed on Maven Central, see above
 	id 'me.champeau.gradle.japicmp' version '0.4.2' apply false
-	id 'de.undercouch.download' version '5.5.0' apply false
+	id 'de.undercouch.download' version '5.6.0' apply false
 	id 'io.spring.javadoc' version '0.0.1' apply false
 	id 'io.spring.javadoc-aggregate' version '0.0.1' apply false
 	id 'biz.aQute.bnd.builder' version '6.4.0' apply false
+	id 'org.graalvm.buildtools.native' version '0.9.25' apply false
+	id 'io.spring.antora.generate-antora-yml' version '0.0.1' apply false
+	id 'net.ltgt.errorprone' version '3.1.0' apply false
 }
 
 description = 'Reactive Streams Netty driver'
@@ -84,20 +85,30 @@ ext {
 	}
 
 	//Metrics
-	micrometerVersion = '1.5.0' //optional baseline: technically could work with 1.2.x, should work with any 1.3.x
+	micrometerVersion = '1.10.0' //optional baseline
+	micrometerTracingVersion = '1.0.0' //optional baseline
+	micrometerDocsVersion = '1.0.0' //optional baseline
 
-	contextPropagationVersion = '1.0.0' //optional baseline
+	contextPropagationDefaultVersion = '1.0.0' //optional baseline
+	if (!project.hasProperty("forceContextPropagationVersion")) {
+		contextPropagationVersion = contextPropagationDefaultVersion
+	}
+	else {
+		contextPropagationVersion = forceContextPropagationVersion
+		println "Context Propagation version defined from command line: ${forceContextPropagationVersion}"
+	}
 
-	braveVersion = '5.16.0'
+	braveVersion = '6.0.2'
+	zipkinSenderVersion = '3.3.0'
 
 	jsr305Version = '3.0.2'
 
 	// Logging
 	slf4jVersion = '1.7.36'
-	logbackVersion = '1.2.12'
+	logbackVersion = '1.2.13'
 
 	// Netty
-	nettyDefaultVersion = '4.1.100.Final'
+	nettyDefaultVersion = '4.1.108.Final'
 	if (!project.hasProperty("forceNettyVersion")) {
 		nettyVersion = nettyDefaultVersion
 	}
@@ -105,22 +116,36 @@ ext {
 		nettyVersion = forceNettyVersion
 		println "Netty version defined from command line: ${forceNettyVersion}"
 	}
-	nettyIoUringVersion = '0.0.23.Final'
-	nettyQuicVersion = '0.0.51.Final'
+	nettyIoUringVersion = '0.0.25.Final'
+	nettyQuicVersion = '0.0.62.Final'
 
 	// Testing
-	brotli4jVersion = '1.12.0'
-	jacksonDatabindVersion = '2.15.3'
+	brotli4jVersion = '1.16.0'
+	zstdJniVersion = '1.5.6-1'
+	jacksonDatabindVersion = '2.17.0'
 	testAddonVersion = reactorCoreVersion
-	assertJVersion = '3.24.2'
-	awaitilityVersion = '4.2.0'
-	hoverflyJavaVersion = '0.15.0'
-	tomcatVersion = '9.0.82'
-	boringSslVersion = '2.0.62.Final'
-	junitVersion = '5.10.0'
-	junitPlatformLauncherVersion = '1.10.0'
+	assertJVersion = '3.25.3'
+	awaitilityVersion = '4.2.1'
+	hoverflyJavaVersion = '0.17.1'
+	tomcatVersion = '9.0.87'
+	boringSslVersion = '2.0.65.Final'
+	junitVersion = '5.10.2'
+	junitPlatformLauncherVersion = '1.10.2'
 	mockitoVersion = '4.11.0'
 	blockHoundVersion = '1.0.8.RELEASE'
+	reflectionsVersion = '0.10.2'
+	errorproneCoreVersion = '2.10.0'
+	errorproneGuavaVersion = '30.0-jre'
+
+	// Antora
+	antoraPluginVersion = '1.0.0'
+	antoraVersion = '3.2.0-alpha.4'
+	antoraAtlasExtensionVersion = '1.0.0-alpha.1'
+	antoraPdfExtensionVersion = '1.0.0-alpha.7'
+	antoraCollectorExtensionVersion = '1.0.0-alpha.3'
+	asciiDocTabVersion = '1.0.0-beta.6'
+	springIoAntoraExtensionsVersion = '1.8.2'
+	springIoAsciidoctorExtensionsVersion = '1.0.0-alpha.9'
 
 	javadocLinks = ["https://docs.oracle.com/javase/8/docs/api/",
 					// Use Reactive Streams 1.0.3 version for javadoc generation
@@ -133,8 +158,9 @@ ext {
 }
 
 nohttp {
-	source.exclude "docs/asciidoc/highlight/**"
+	source.exclude "docs/modules/ROOT/assets/highlight/**"
 	source.exclude "**/build/**"
+	source.exclude "docs/.gradle/**"
 }
 
 spotless {
@@ -152,7 +178,7 @@ spotless {
 		enforceCheck false
 	}
 	else {
-		String spotlessBranch = "origin/1.0.x"
+		String spotlessBranch = "origin/main"
 		println "[Spotless] Local run detected, ratchet from $spotlessBranch"
 		ratchetFrom spotlessBranch
 	}
@@ -163,9 +189,9 @@ spotless {
 	format 'gradle', {
 		target '**/*.gradle'
 		// find start of gradle files by looking for either `import`, `apply`
-		// or start of blocks like `javadoc{` or `configure(rootProject) {`...
+		// or start of blocks like `javadoc {` or `configure(rootProject) {`...
 		licenseHeaderFile('codequality/spotless/licenseSlashstarStyle.txt',
-				"^\\w+(\\(\\w+\\))?\\s?\\{\$|import|apply")
+				"^\\w+(\\(\\w+\\))?\\s?\\{?|import|apply")
 	}
 }
 
@@ -255,6 +281,8 @@ subprojects {
 			systemProperty("forceTransport", forceTransport)
 		}
 		systemProperty("nettyVersionMicro", VersionNumber.parse(nettyVersion.toString()).micro)
+		systemProperty("reactorCoreVersionMinor", VersionNumber.parse(reactorCoreVersion.toString()).minor)
+		systemProperty("contextPropagationVersionMicro", VersionNumber.parse(contextPropagationVersion.toString()).micro)
 		scanForTestClasses = false
 		include '**/*Tests.*'
 		include '**/*Test.*'
