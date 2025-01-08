@@ -48,6 +48,8 @@ include::{examplesdir}/address/Application.java[lines=18..34]
 <2> Configures the `port` to which this client should connect
 ====
 
+NOTE: The port can be specified also with *PORT* environment variable.
+
 == Eager Initialization
 
 By default, the initialization of the `UdpClient` resources happens on demand. This means that the `connect
@@ -172,32 +174,7 @@ You can find more about Netty channel options at the following links:
 include::wire-logger.adoc[]
 
 [[client-udp-connection-configurations-event-loop-group]]
-=== Event Loop Group
-
-By default, the UDP client uses "`Event Loop Group,`" where the number of the worker threads equals the number of
-processors available to the runtime on initialization (but with a minimum value of 4). When you need a different configuration,
-you can use one of the {javadoc}/reactor/netty/resources/LoopResources.html[`LoopResources`]`#create`
-methods.
-
-The following listing shows the default configuration for the "`Event Loop Group`":
-
-====
-[source,java,indent=0]
-.{sourcedir}/reactor/netty/ReactorNetty.java
-----
-include::{sourcedir}/reactor/netty/ReactorNetty.java[lines=86..120]
-----
-====
-
-If you need changes to the these settings, you can apply the following configuration:
-
-====
-[source,java,indent=0]
-.{examplesdir}/eventloop/Application.java
-----
-include::{examplesdir}/eventloop/Application.java[lines=18..38]
-----
-====
+include::eventloop.adoc[]
 
 == Metrics
 The UDP client supports built-in integration with https://micrometer.io/[`Micrometer`].
@@ -208,11 +185,16 @@ The following table provides information for the UDP client metrics:
 [width="100%",options="header"]
 |=======
 | metric name | type | description
-| reactor.netty.udp.client.data.received | DistributionSummary | Amount of the data received, in bytes
-| reactor.netty.udp.client.data.sent | DistributionSummary | Amount of the data sent, in bytes
-| reactor.netty.udp.client.errors | Counter | Number of errors that occurred
-| reactor.netty.udp.client.connect.time | Timer | Time spent for connecting to the remote address
-| reactor.netty.udp.client.address.resolver | Timer | Time spent for resolving the address
+| reactor.netty.udp.client.data.received | DistributionSummary | Amount of the data received, in bytes.
+See <<observability-metrics-data-received>>
+| reactor.netty.udp.client.data.sent | DistributionSummary | Amount of the data sent, in bytes.
+See <<observability-metrics-data-sent>>
+| reactor.netty.udp.client.errors | Counter | Number of errors that occurred.
+See <<observability-metrics-errors-count>>
+| reactor.netty.udp.client.connect.time | Timer | Time spent for connecting to the remote address.
+See <<observability-metrics-connect-time>>
+| reactor.netty.udp.client.address.resolver | Timer | Time spent for resolving the address.
+See <<observability-metrics-hostname-resolution-time>>
 |=======
 
 These additional metrics are also available:

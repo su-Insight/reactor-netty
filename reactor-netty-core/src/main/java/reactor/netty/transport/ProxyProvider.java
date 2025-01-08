@@ -27,6 +27,7 @@ import java.util.function.Supplier;
 import java.util.regex.Pattern;
 
 import io.netty.channel.Channel;
+import io.netty.channel.ChannelHandler;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelOutboundHandlerAdapter;
 import io.netty.channel.ChannelPipeline;
@@ -45,14 +46,14 @@ import reactor.netty.transport.logging.AdvancedByteBufFormat;
 import reactor.util.annotation.Nullable;
 
 /**
- * Proxy configuration
+ * Proxy configuration.
  *
  * @author Violeta Georgieva
  */
 public final class ProxyProvider {
 
 	/**
-	 * Creates a builder for {@link ProxyProvider ProxyProvider}
+	 * Creates a builder for {@link ProxyProvider ProxyProvider}.
 	 *
 	 * @return a new ProxyProvider builder
 	 */
@@ -89,7 +90,7 @@ public final class ProxyProvider {
 	}
 
 	/**
-	 * The proxy type
+	 * The proxy type.
 	 *
 	 * @return The proxy type
 	 */
@@ -108,7 +109,7 @@ public final class ProxyProvider {
 
 	/**
 	 * A predicate {@link Predicate} on {@link SocketAddress} that returns true when the provided address should be
-	 * reached directly, bypassing the proxy
+	 * reached directly, bypassing the proxy.
 	 *
 	 * @return The predicate {@link Predicate} to test the incoming {@link SocketAddress} if it should be reached
 	 * directly, bypassing the proxy
@@ -119,7 +120,7 @@ public final class ProxyProvider {
 	}
 
 	/**
-	 * Return a new eventual {@link ProxyHandler}
+	 * Return a new eventual {@link ProxyHandler}.
 	 *
 	 * @return a new eventual {@link ProxyHandler}
 	 */
@@ -166,12 +167,13 @@ public final class ProxyProvider {
 	}
 
 	/**
-	 * Proxy Type
+	 * Proxy Type.
 	 */
 	public enum Proxy {
 		HTTP, SOCKS4, SOCKS5
 	}
 
+	@SuppressWarnings("deprecation")
 	public void addProxyHandler(Channel channel) {
 		Objects.requireNonNull(channel, "channel");
 		ChannelPipeline pipeline = channel.pipeline();
@@ -180,13 +182,7 @@ public final class ProxyProvider {
 		// special handler which ensures that any VoidPromise will be converted to "unvoided" promises (for support of listeners).
 		// Note: an example of a VoidPromise which does not support listeners is the MonoSendMany.SendManyInner promise.
 		if (this.type == Proxy.SOCKS4 || type == Proxy.SOCKS5) {
-			pipeline.addAfter(NettyPipeline.ProxyHandler, NettyPipeline.UnvoidHandler, new ChannelOutboundHandlerAdapter() {
-				@Override
-				@SuppressWarnings("FutureReturnValueIgnored")
-				public void write(ChannelHandlerContext ctx, Object msg, ChannelPromise promise) {
-					ctx.write(msg, promise.unvoid());
-				}
-			});
+			pipeline.addAfter(NettyPipeline.ProxyHandler, NettyPipeline.UnvoidHandler, UnvoidHandler.INSTANCE);
 		}
 
 		if (pipeline.get(NettyPipeline.LoggingHandler) != null) {
@@ -487,7 +483,7 @@ public final class ProxyProvider {
 
 		/**
 		 * Creates a {@link RegexShouldProxyPredicate} based off the provided pattern with possible wildcards as
-		 * described in https://docs.oracle.com/javase/7/docs/api/java/net/doc-files/net-properties.html
+		 * described in https://docs.oracle.com/javase/7/docs/api/java/net/doc-files/net-properties.html.
 		 *
 		 * @param pattern The string wildcarded expression
 		 * @return a predicate whether we should direct to proxy
@@ -546,6 +542,18 @@ public final class ProxyProvider {
 		@Override
 		public String toString() {
 			return regex;
+		}
+	}
+
+	@ChannelHandler.Sharable
+	static final class UnvoidHandler extends ChannelOutboundHandlerAdapter {
+
+		static final UnvoidHandler INSTANCE = new UnvoidHandler();
+
+		@Override
+		@SuppressWarnings("FutureReturnValueIgnored")
+		public void write(ChannelHandlerContext ctx, Object msg, ChannelPromise promise) {
+			ctx.write(msg, promise.unvoid());
 		}
 	}
 
@@ -652,7 +660,7 @@ public final class ProxyProvider {
 		Builder connectTimeoutMillis(long connectTimeoutMillis);
 
 		/**
-		 * Builds new ProxyProvider
+		 * Builds new ProxyProvider.
 		 *
 		 * @return builds new ProxyProvider
 		 */

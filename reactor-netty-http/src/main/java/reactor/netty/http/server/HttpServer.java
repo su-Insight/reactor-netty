@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011-2022 VMware, Inc. or its affiliates, All Rights Reserved.
+ * Copyright (c) 2011-2024 VMware, Inc. or its affiliates, All Rights Reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -47,12 +47,13 @@ import reactor.netty.http.logging.ReactorNettyHttpMessageLogFactory;
 import reactor.netty.http.server.logging.AccessLog;
 import reactor.netty.http.server.logging.AccessLogArgProvider;
 import reactor.netty.http.server.logging.AccessLogFactory;
+import reactor.netty.internal.util.Metrics;
 import reactor.netty.tcp.SslProvider;
 import reactor.netty.tcp.TcpServer;
 import reactor.netty.transport.ServerTransport;
 import reactor.util.Logger;
 import reactor.util.Loggers;
-import reactor.util.Metrics;
+import reactor.util.annotation.Nullable;
 import reactor.util.context.Context;
 
 import static reactor.netty.ReactorNetty.format;
@@ -78,7 +79,7 @@ import static reactor.netty.ReactorNetty.format;
 public abstract class HttpServer extends ServerTransport<HttpServer, HttpServerConfig> {
 
 	/**
-	 * Prepare an {@link HttpServer}
+	 * Prepare an {@link HttpServer}.
 	 *
 	 * @return a new {@link HttpServer}
 	 */
@@ -315,7 +316,7 @@ public abstract class HttpServer extends ServerTransport<HttpServer, HttpServerC
 
 	/**
 	 * Enable GZip response compression if the client request presents accept encoding
-	 * headers AND the response reaches a minimum threshold
+	 * headers AND the response reaches a minimum threshold.
 	 *
 	 * @param minResponseSize compression is performed once response size exceeds the given
 	 * value in bytes
@@ -334,12 +335,14 @@ public abstract class HttpServer extends ServerTransport<HttpServer, HttpServerC
 	/**
 	 * Configure the
 	 * {@link ServerCookieEncoder}; {@link ServerCookieDecoder} will be
-	 * chosen based on the encoder
+	 * chosen based on the encoder.
 	 *
 	 * @param encoder the preferred ServerCookieEncoder
 	 *
 	 * @return a new {@link HttpServer}
+	 * @deprecated as of 1.1.0. This will be removed in 2.0.0 as Netty 5 supports only strict validation.
 	 */
+	@Deprecated
 	public final HttpServer cookieCodec(ServerCookieEncoder encoder) {
 		Objects.requireNonNull(encoder, "encoder");
 		ServerCookieDecoder decoder = encoder == ServerCookieEncoder.LAX ?
@@ -352,13 +355,15 @@ public abstract class HttpServer extends ServerTransport<HttpServer, HttpServerC
 
 	/**
 	 * Configure the
-	 * {@link ServerCookieEncoder} and {@link ServerCookieDecoder}
+	 * {@link ServerCookieEncoder} and {@link ServerCookieDecoder}.
 	 *
 	 * @param encoder the preferred ServerCookieEncoder
 	 * @param decoder the preferred ServerCookieDecoder
 	 *
 	 * @return a new {@link HttpServer}
+	 * @deprecated as of 1.1.0. This will be removed in 2.0.0 as Netty 5 supports only strict validation.
 	 */
+	@Deprecated
 	public final HttpServer cookieCodec(ServerCookieEncoder encoder, ServerCookieDecoder decoder) {
 		Objects.requireNonNull(encoder, "encoder");
 		Objects.requireNonNull(decoder, "decoder");
@@ -410,7 +415,7 @@ public abstract class HttpServer extends ServerTransport<HttpServer, HttpServerC
 	}
 
 	/**
-	 * Attach an I/O handler to react on a connected client
+	 * Attach an I/O handler to react on a connected client.
 	 *
 	 * @param handler an I/O handler that can dispose underlying connection when {@link
 	 * Publisher} terminates. Only the first registered handler will subscribe to the
@@ -431,7 +436,7 @@ public abstract class HttpServer extends ServerTransport<HttpServer, HttpServerC
 	}
 
 	/**
-	 * Apply HTTP/2 configuration
+	 * Apply HTTP/2 configuration.
 	 *
 	 * @param http2Settings configures {@link Http2SettingsSpec} before requesting
 	 * @return a new {@link HttpServer}
@@ -597,10 +602,10 @@ public abstract class HttpServer extends ServerTransport<HttpServer, HttpServerC
 	 */
 	public final HttpServer metrics(boolean enable, Function<String, String> uriTagValue) {
 		if (enable) {
-			if (!Metrics.isInstrumentationAvailable()) {
+			if (!Metrics.isMicrometerAvailable() && !Metrics.isTracingAvailable()) {
 				throw new UnsupportedOperationException(
-						"To enable metrics, you must add the dependency `io.micrometer:micrometer-core`" +
-								" to the class path first");
+						"To enable metrics, you must add the dependencies to `io.micrometer:micrometer-core`" +
+								" and `io.micrometer:micrometer-tracing` to the class path first");
 			}
 			if (uriTagValue == Function.<String>identity()) {
 				log.debug("Metrics are enabled with [uriTagValue=Function#identity]. " +
@@ -616,6 +621,73 @@ public abstract class HttpServer extends ServerTransport<HttpServer, HttpServerC
 		else if (configuration().metricsRecorder() != null) {
 			HttpServer dup = duplicate();
 			dup.configuration().metricsRecorder(null);
+			dup.configuration().uriTagValue = null;
+			return dup;
+		}
+		else {
+			return this;
+		}
+	}
+
+	/**
+	 * Whether to enable metrics to be collected and registered in Micrometer's
+	 * {@link io.micrometer.core.instrument.Metrics#globalRegistry globalRegistry}
+	 * under the name {@link reactor.netty.Metrics#HTTP_SERVER_PREFIX}.
+	 * <p>{@code uriTagValue} function receives the actual uri and returns the uri tag value
+	 * that will be used for the metrics with {@link reactor.netty.Metrics#URI} tag.
+	 * For example instead of using the actual uri {@code "/users/1"} as uri tag value, templated uri
+	 * {@code "/users/{id}"} can be used.
+	 * <p><strong>Note:</strong>
+	 * It is strongly recommended to provide template-like form for the URIs. Without a conversion to a template-like form,
+	 * each distinct URI leads to the creation of a distinct tag, which takes a lot of memory for the metrics.
+	 * <p><strong>Note:</strong>
+	 * It is strongly recommended applications to configure an upper limit for the number of the URI tags.
+	 * For example:
+	 * <pre class="code">
+	 * Metrics.globalRegistry
+	 *        .config()
+	 *        .meterFilter(MeterFilter.maximumAllowableTags(HTTP_SERVER_PREFIX, URI, 100, MeterFilter.deny()));
+	 * </pre>
+	 * <p>{@code methodTagValue} function receives the actual method name and returns the method tag value
+	 * that will be used for the metrics with {@link reactor.netty.Metrics#METHOD} tag.
+	 * <p>By default metrics are not enabled.
+	 *
+	 * @param enable true enables metrics collection; false disables it
+	 * @param uriTagValue a function that receives the actual uri and returns the uri tag value
+	 * that will be used for the metrics with {@link reactor.netty.Metrics#URI} tag
+	 * @param methodTagValue a function that receives the actual method name and returns the method tag value
+	 * that will be used for the metrics with {@link reactor.netty.Metrics#METHOD} tag
+	 * @return a new {@link HttpServer}
+	 * @since 1.0.39
+	 */
+	public final HttpServer metrics(boolean enable, Function<String, String> uriTagValue, Function<String, String> methodTagValue) {
+		if (enable) {
+			Objects.requireNonNull(methodTagValue, "methodTagValue");
+			if (!Metrics.isMicrometerAvailable() && !Metrics.isTracingAvailable()) {
+				throw new UnsupportedOperationException(
+						"To enable metrics, you must add the dependencies to `io.micrometer:micrometer-core`" +
+								" and `io.micrometer:micrometer-tracing` to the class path first");
+			}
+			if (uriTagValue == Function.<String>identity()) {
+				log.debug("Metrics are enabled with [uriTagValue=Function#identity]. " +
+						"It is strongly recommended to provide template-like form for the URIs. " +
+						"Without a conversion to a template-like form, each distinct URI leads " +
+						"to the creation of a distinct tag, which takes a lot of memory for the metrics.");
+			}
+			if (methodTagValue == Function.<String>identity()) {
+				log.debug("Metrics are enabled with [methodTagValue=Function#identity]. " +
+						"It is strongly recommended to provide a function for transforming the method names.");
+			}
+			HttpServer dup = duplicate();
+			dup.configuration().metricsRecorder(() -> configuration().defaultMetricsRecorder());
+			dup.configuration().methodTagValue = methodTagValue;
+			dup.configuration().uriTagValue = uriTagValue;
+			return dup;
+		}
+		else if (configuration().metricsRecorder() != null) {
+			HttpServer dup = duplicate();
+			dup.configuration().metricsRecorder(null);
+			dup.configuration().methodTagValue = null;
 			dup.configuration().uriTagValue = null;
 			return dup;
 		}
@@ -664,7 +736,50 @@ public abstract class HttpServer extends ServerTransport<HttpServer, HttpServerC
 	}
 
 	/**
-	 * Removes any previously applied SSL configuration customization
+	 * Specifies whether the metrics are enabled on the {@link HttpServer}.
+	 * All generated metrics are provided to the specified recorder which is only
+	 * instantiated if metrics are being enabled (the instantiation is not lazy,
+	 * but happens immediately, while configuring the {@link HttpServer}).
+	 * <p>{@code uriValue} function receives the actual uri and returns the uri value
+	 * that will be used when the metrics are propagated to the recorder.
+	 * For example instead of using the actual uri {@code "/users/1"} as uri value, templated uri
+	 * {@code "/users/{id}"} can be used.
+	 * <p>{@code methodValue} function receives the actual method name and returns the method value
+	 * that will be used when the metrics are propagated to the recorder.
+	 *
+	 * @param enable true enables metrics collection; false disables it
+	 * @param recorder a supplier for the metrics recorder that receives the collected metrics
+	 * @param uriValue a function that receives the actual uri and returns the uri value
+	 * that will be used when the metrics are propagated to the recorder.
+	 * @param methodValue a function that receives the actual method name and returns the method value
+	 * that will be used when the metrics are propagated to the recorder.
+	 * @return a new {@link HttpServer}
+	 * @since 1.0.39
+	 */
+	public final HttpServer metrics(boolean enable, Supplier<? extends ChannelMetricsRecorder> recorder,
+			Function<String, String> uriValue, Function<String, String> methodValue) {
+		if (enable) {
+			Objects.requireNonNull(methodValue, "methodTagValue");
+			HttpServer dup = duplicate();
+			dup.configuration().metricsRecorder(recorder);
+			dup.configuration().methodTagValue = methodValue;
+			dup.configuration().uriTagValue = uriValue;
+			return dup;
+		}
+		else if (configuration().metricsRecorder() != null) {
+			HttpServer dup = duplicate();
+			dup.configuration().metricsRecorder(null);
+			dup.configuration().methodTagValue = null;
+			dup.configuration().uriTagValue = null;
+			return dup;
+		}
+		else {
+			return this;
+		}
+	}
+
+	/**
+	 * Removes any previously applied SSL configuration customization.
 	 *
 	 * @return a new {@link HttpServer}
 	 */
@@ -677,6 +792,13 @@ public abstract class HttpServer extends ServerTransport<HttpServer, HttpServerC
 		return this;
 	}
 
+	/**
+	 * The port to which this server should bind.
+	 * If a port is not specified, the system picks up an ephemeral port.
+	 *
+	 * @param port The port to bind to.
+	 * @return a new {@link HttpServer}
+	 */
 	@Override
 	public final HttpServer port(int port) {
 		return super.port(port);
@@ -736,6 +858,51 @@ public abstract class HttpServer extends ServerTransport<HttpServer, HttpServerC
 	}
 
 	/**
+	 * Specifies the maximum duration allowed between each network-level read operation while reading a given request
+	 * content (resolution: ms). In other words, {@link io.netty.handler.timeout.ReadTimeoutHandler} is added to the
+	 * channel pipeline after all the request headers are received, and removed from the channel pipeline after the
+	 * content is fully received.
+	 * If the {@code readTimeout} is {@code null}, any previous setting will be removed and no
+	 * {@code readTimeout} will be applied.
+	 * If the {@code readTimeout} is less than {@code 1ms}, then {@code 1ms} will be the
+	 * {@code readTimeout}.
+	 *
+	 * @param readTimeout the maximum duration allowed between each network-level read operation while reading a given
+	 * request content (resolution: ms)
+	 * @return a new {@link HttpServer}
+	 * @since 1.1.9
+	 * @see io.netty.handler.timeout.ReadTimeoutHandler
+	 */
+	public final HttpServer readTimeout(@Nullable Duration readTimeout) {
+		if (Objects.equals(readTimeout, configuration().readTimeout)) {
+			return this;
+		}
+		HttpServer dup = duplicate();
+		dup.configuration().readTimeout = readTimeout;
+		return dup;
+	}
+
+	/**
+	 * Specifies the maximum duration for reading a given request content (resolution: ms).
+	 * If the {@code requestTimeout} is {@code null}, any previous setting will be removed and no
+	 * {@code requestTimeout} will be applied.
+	 * If the {@code requestTimeout} is less than {@code 1ms}, then {@code 1ms} will be the
+	 * {@code requestTimeout}.
+	 *
+	 * @param requestTimeout the maximum duration for reading a given request content (resolution: ms)
+	 * @return a new {@link HttpServer}
+	 * @since 1.1.9
+	 */
+	public final HttpServer requestTimeout(@Nullable Duration requestTimeout) {
+		if (Objects.equals(requestTimeout, configuration().requestTimeout)) {
+			return this;
+		}
+		HttpServer dup = duplicate();
+		dup.configuration().requestTimeout = requestTimeout;
+		return dup;
+	}
+
+	/**
 	 * Define routes for the server through the provided {@link HttpServerRoutes} builder.
 	 *
 	 * @param routesBuilder provides a route builder to be mutated in order to define routes.
@@ -750,10 +917,13 @@ public abstract class HttpServer extends ServerTransport<HttpServer, HttpServerC
 
 	/**
 	 * Apply an SSL configuration customization via the passed builder. The builder
-	 * will produce the {@link SslContext} to be passed to with a default value of
-	 * {@code 10} seconds handshake timeout unless the environment property {@code
-	 * reactor.netty.tcp.sslHandshakeTimeout} is set.
-	 *
+	 * will produce the {@link SslContext} to be passed to with a default value of:
+	 * <ul>
+	 *     <li>{@code 10} seconds handshake timeout unless the environment property
+	 *     {@code reactor.netty.tcp.sslHandshakeTimeout} is set.</li>
+	 *     <li>{@code 3} seconds close_notify flush timeout</li>
+	 *     <li>{@code 0} second close_notify read timeout</li>
+	 * </ul>
 	 * If {@link SelfSignedCertificate} needs to be used, the sample below can be
 	 * used. Note that {@link SelfSignedCertificate} should not be used in production.
 	 * <pre>
@@ -774,9 +944,13 @@ public abstract class HttpServer extends ServerTransport<HttpServer, HttpServerC
 
 	/**
 	 * Apply an SSL configuration customization via the passed builder. The builder
-	 * will produce the {@link SslContext} to be passed to with a default value of
-	 * {@code 10} seconds handshake timeout unless the environment property {@code
-	 * reactor.netty.tcp.sslHandshakeTimeout} is set.
+	 * will produce the {@link SslContext} to be passed to with a default value of:
+	 * <ul>
+	 *     <li>{@code 10} seconds handshake timeout unless the environment property
+	 *     {@code reactor.netty.tcp.sslHandshakeTimeout} is set.</li>
+	 *     <li>{@code 3} seconds close_notify flush timeout</li>
+	 *     <li>{@code 0} second close_notify read timeout</li>
+	 * </ul>
 	 * <p>
 	 * If {@link SelfSignedCertificate} needs to be used, the sample below can be
 	 * used. Note that {@link SelfSignedCertificate} should not be used in production.

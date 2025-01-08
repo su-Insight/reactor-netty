@@ -76,7 +76,7 @@ public final class ChannelContextAccessor implements ContextAccessor<Channel, Ch
 		if (!valuesToWrite.isEmpty()) {
 			ContextView contextView = getChannelContext(targetContext);
 			setChannelContext(targetContext, contextView != null ?
-					Context.of(contextView).putAllMap(valuesToWrite) : Context.of(valuesToWrite));
+							Context.of(contextView).putAllMap(valuesToWrite) : Context.of(valuesToWrite));
 		}
 		return targetContext;
 	}

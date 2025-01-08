@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2022 VMware, Inc. or its affiliates, All Rights Reserved.
+ * Copyright (c) 2022-2023 VMware, Inc. or its affiliates, All Rights Reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,6 +17,7 @@ package reactor.netty;
 
 import io.micrometer.context.ContextRegistry;
 import io.micrometer.context.ContextSnapshot;
+import io.micrometer.observation.contextpropagation.ObservationThreadLocalAccessor;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
 import io.netty.channel.ChannelHandler;
@@ -24,6 +25,7 @@ import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelOutboundHandlerAdapter;
 import io.netty.channel.ChannelPromise;
 import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.MethodSource;
 import reactor.core.publisher.Mono;
@@ -35,7 +37,6 @@ import reactor.test.StepVerifier;
 
 import java.nio.charset.Charset;
 import java.time.Duration;
-import java.util.HashMap;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static reactor.netty.ReactorNetty.getChannelContext;
@@ -49,9 +50,13 @@ class ContextPropagationTest {
 		        .block(Duration.ofSeconds(30));
 	}
 
+	@Test
+	void testObservationKey() {
+		assertThat(Metrics.OBSERVATION_KEY).isEqualTo(ObservationThreadLocalAccessor.KEY);
+	}
+
 	@ParameterizedTest
 	@MethodSource("tcpClientCombinations")
-	@SuppressWarnings("unchecked")
 	void testContextPropagation(TcpClient client) {
 		DisposableServer disposableServer =
 				TcpServer.create()
@@ -69,7 +74,7 @@ class ContextPropagationTest {
 					client.port(disposableServer.port())
 					      .wiretap(true)
 					      .connect()
-					      .contextWrite(ctx -> ctx.putAllMap((HashMap<Object, Object>) ContextSnapshot.captureAll(registry)))
+					      .contextWrite(ctx -> ContextSnapshot.captureAll(registry).updateContext(ctx))
 					      .block();
 
 			assertThat(connection).isNotNull();
@@ -129,7 +134,7 @@ class ContextPropagationTest {
 				}
 				if (msg instanceof ByteBuf) {
 					ByteBuf buffer1;
-					try (ContextSnapshot.Scope scope = ContextSnapshot.captureFrom(ctx.channel()).setThreadLocals()) {
+					try (ContextSnapshot.Scope scope = ContextSnapshot.setAllThreadLocalsFrom(ctx.channel())) {
 						buffer1 = Unpooled.wrappedBuffer(TestThreadLocalHolder.value().getBytes(Charset.defaultCharset()));
 					}
 					ByteBuf buffer2 = Unpooled.wrappedBuffer(TestThreadLocalHolder.value().getBytes(Charset.defaultCharset()));

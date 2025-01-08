@@ -17,7 +17,7 @@ and is intentional because only the user/framework knows if the actual protocol 
 [source,java,indent=0]
 ../../../reactor-netty-core/src/main/java/reactor/netty/ReactorNetty.java
 ----
-include::./../../reactor-netty-core/src/main/java/reactor/netty/ReactorNetty.java[lines=117..127]
+include::./../../reactor-netty-core/src/main/java/reactor/netty/ReactorNetty.java[lines=123..133]
 ----
 ====
 
@@ -66,6 +66,17 @@ If you need to disable the connection pool, you can apply the following configur
 include::{examplesdir}/pool/Application.java[lines=18..35]
 ----
 ====
+
+=== Disposing Connection Pool
+
+- If you use the default `ConnectionProvider` provided by Reactor Netty, invoke
+{javadoc}/reactor/netty/http/HttpResources.html[`HttpResources`]`#disposeLoopsAndConnections`/`#disposeLoopsAndConnectionsLater` method.
+
+NOTE: Disposing `HttpResources` means that every client that is using it, will not be able to use it anymore!
+
+- If you use custom `ConnectionProvider`, invoke {javadoc}/reactor/netty/resources/ConnectionProvider.html[`ConnectionProvider`]`#dispose`/`#disposeLater`/`#disposeWhen` method.
+
+NOTE: Disposing the custom `ConnectionProvider` means that every client that is configured to use it, will not be able to use it anymore!
 
 === Metrics
 The pooled `ConnectionProvider` supports built-in integration with https://micrometer.io/[`Micrometer`].

@@ -49,6 +49,8 @@ include::{examplesdir}/address/Application.java[lines=18..33]
 <2> Configures the `TCP` port
 ====
 
+NOTE: The port can be specified also with *PORT* environment variable.
+
 == Eager Initialization
 
 By default, the initialization of the `TcpClient` resources happens on demand. This means that the `connect
@@ -204,32 +206,7 @@ You can find more about `Netty` channel options at the following links:
 include::wire-logger.adoc[]
 
 [[client-tcp-level-configurations-event-loop-group]]
-=== Event Loop Group
-
-By default the `TCP` client uses an "`Event Loop Group`", where the number of the worker threads equals the number of
-processors available to the runtime on initialization (but with a minimum value of 4). When you need a different configuration,
-you can use one of the {javadoc}/reactor/netty/resources/LoopResources.html[LoopResource]`#create`
-methods.
-
-The following listing shows the default configuration for the Event Loop Group:
-
-====
-[source,java,indent=0]
-.{sourcedir}/reactor/netty/ReactorNetty.java
-----
-include::{sourcedir}/reactor/netty/ReactorNetty.java[lines=86..120]
-----
-====
-
-If you need changes to the these settings, you can apply the following configuration:
-
-====
-[source,java,indent=0]
-.{examplesdir}/eventloop/Application.java
-----
-include::{examplesdir}/eventloop/Application.java[lines=18..37]
-----
-====
+include::eventloop.adoc[]
 
 include::tcp-client-conn-provider.adoc[]
 
@@ -277,12 +254,18 @@ The following table provides information for the TCP client metrics:
 [width="100%",options="header"]
 |=======
 | metric name | type | description
-| reactor.netty.tcp.client.data.received | DistributionSummary | Amount of the data received, in bytes
-| reactor.netty.tcp.client.data.sent | DistributionSummary | Amount of the data sent, in bytes
-| reactor.netty.tcp.client.errors | Counter | Number of errors that occurred
-| reactor.netty.tcp.client.tls.handshake.time | Timer | Time spent for TLS handshake
-| reactor.netty.tcp.client.connect.time | Timer | Time spent for connecting to the remote address
-| reactor.netty.tcp.client.address.resolver | Timer | Time spent for resolving the address
+| reactor.netty.tcp.client.data.received | DistributionSummary | Amount of the data received, in bytes.
+See <<observability-metrics-data-received>>
+| reactor.netty.tcp.client.data.sent | DistributionSummary | Amount of the data sent, in bytes.
+See <<observability-metrics-data-sent>>
+| reactor.netty.tcp.client.errors | Counter | Number of errors that occurred.
+See <<observability-metrics-errors-count>>
+| reactor.netty.tcp.client.tls.handshake.time | Timer | Time spent for TLS handshake.
+See <<observability-metrics-tls-handshake-time>>
+| reactor.netty.tcp.client.connect.time | Timer | Time spent for connecting to the remote address.
+See <<observability-metrics-connect-time>>
+| reactor.netty.tcp.client.address.resolver | Timer | Time spent for resolving the address.
+See <<observability-metrics-hostname-resolution-time>>
 |=======
 
 These additional metrics are also available:
@@ -315,6 +298,64 @@ include::{examplesdir}/metrics/custom/Application.java[lines=18..37]
 <1> Enables TCP client metrics and provides {javadoc}/reactor/netty/channel/ChannelMetricsRecorder.html[`ChannelMetricsRecorder`] implementation.
 ====
 
+== Tracing
+The TCP client supports built-in integration with https://micrometer.io/docs/tracing[`Micrometer Tracing`].
+
+The following table provides information for the TCP client spans:
+
+[width="100%",options="header"]
+|=======
+| contextual name | description
+| hostname resolution | Information and time spent for resolving the address.
+See <<observability-spans-hostname-resolution-span>>.
+| connect | Information and time spent for connecting to the remote address.
+See <<observability-spans-connect-span>>.
+| tls handshake | Information and time spent for TLS handshake.
+See <<observability-spans-tls-handshake-span>>.
+|=======
+
+The following example enables that integration. This concrete example uses `Brave` and reports the information to `Zipkin`.
+See the https://micrometer.io/docs/tracing#_micrometer_tracing_opentelemetry_setup[`Micrometer Tracing`] documentation for `OpenTelemetry` setup.
+
+====
+[source,java,indent=0]
+.{examplesdir}/tracing/Application.java
+----
+include::{examplesdir}/tracing/Application.java[lines=18..81]
+----
+<1> Initializes Brave, Zipkin, and the Observation registry.
+<2> Enables the built-in integration with Micrometer.
+====
+
+The result in `Zipkin` looks like:
+
+image::images/tcp-client-tracing.png[]
+
+=== Access Current Observation
+Project Micrometer provides https://micrometer.io/docs/contextPropagation[`a library`] that assists with context propagation across
+different types of context mechanisms such as `ThreadLocal`, `Reactor Context` and others.
+
+The following example shows how to use this library in a custom `ChannelHandler`:
+
+====
+[source,java,indent=0]
+.{examplesdir}/tracing/custom/Application.java
+----
+include::{examplesdir}/tracing/custom/Application.java[lines=18..80]
+----
+<1> Initializes Brave, Zipkin, and the Observation registry.
+<2> Enables the built-in integration with Micrometer.
+<3> Custom `ChannelHandler` that uses context propagation library. This concrete example overrides only
+`ChannelOutboundHandlerAdapter#connect`, if it is needed, the same logic can be used for the rest of the methods.
+Also, this concrete example sets all `ThreadLocal` values for which there is a value in the given `Channel`,
+if another behaviour is needed please check https://micrometer.io/docs/contextPropagation[`context propagation library API`].
+For example, you may want to set only some of the `ThreadLocal` values.
+====
+
+NOTE: When you enable Reactor Netty tracing within a framework, you may need to let Reactor Netty use the `ObservationRegistry` created by this framework.
+For this purpose you need to invoke {javadoc}/reactor/netty/Metrics.html#observationRegistry-io.micrometer.observation.ObservationRegistry-[`reactor.netty.Metrics#observationRegistry`].
+You may also need to configure the Reactor Netty `ObservationHandlers` using the API provided by the framework.
+
 == Unix Domain Sockets
 The `TCP` client supports Unix Domain Sockets (UDS) when native transport is in use.
 
@@ -344,11 +385,13 @@ include::{examplesdir}/resolver/Application.java[lines=18..36]
 <1> The timeout of each DNS query performed by this resolver will be 500ms.
 ====
 
-The following listing shows the available configurations:
+The following listing shows the available configurations.
+Additionally, https://tools.ietf.org/html/rfc7766[`TCP fallback`] is enabled by default.
 
 [width="100%",options="header"]
 |=======
 | Configuration name | Description
+| `bindAddressSupplier` | The supplier of the local address to bind to.
 | `cacheMaxTimeToLive` | The max time to live of the cached DNS resource records (resolution: seconds).
  If the time to live of the DNS resource record returned by the DNS server is greater
  than this max time to live, this resolver ignores the time to live from
@@ -367,6 +410,7 @@ This configuration is applicable for `DnsNameResolver#resolveAll(String)`. By de
  how much data the resolver can read per response. By default, this setting is enabled.
 | `disableRecursionDesired` | Specifies whether this resolver has to send a DNS query with the recursion desired (RD) flag set.
  By default, this setting is enabled.
+| `dnsAddressResolverGroupProvider` | Sets a custom function to create a `DnsAddressResolverGroup` given a `DnsNameResolverBuilder`
 | `hostsFileEntriesResolver` | Sets a custom {nettyjavadoc}/io/netty/resolver/HostsFileEntriesResolver.html[`HostsFileEntriesResolver`] to be used for hosts file entries.
 Default: {nettyjavadoc}/io/netty/resolver/DefaultHostsFileEntriesResolver.html[`DefaultHostsFileEntriesResolver`].
 | `maxPayloadSize` | Sets the capacity of the datagram packet buffer (in bytes). Default: 4096.
@@ -374,9 +418,10 @@ Default: {nettyjavadoc}/io/netty/resolver/DefaultHostsFileEntriesResolver.html[`
 | `ndots` | Sets the number of dots that must appear in a name before an initial absolute query is made.
  Default: -1 (to determine the value from the OS on Unix or use a value of 1 otherwise).
 | `queryTimeout` | Sets the timeout of each DNS query performed by this resolver (resolution: milliseconds). Default: 5000.
-| `resolvedAddressTypes` | The list of the protocol families of the resolved address.
 | `resolveCache` | The cache to use to store resolved DNS entries.
-| `bindAddressSupplier` | The supplier of the local address to bind to.
+| `resolvedAddressTypes` | The list of the protocol families of the resolved address.
+| `retryTcpOnTimeout` | Specifies whether this resolver will also fallback to TCP if a timeout is detected.
+By default, the resolver will only try to use TCP if the response is marked as truncated.
 | `roundRobinSelection` | Enables an
  {nettyjavadoc}/io/netty/resolver/AddressResolverGroup.html[`AddressResolverGroup`] of
  {nettyjavadoc}/io/netty/resolver/dns/DnsNameResolver.html[`DnsNameResolver`] that supports random selection

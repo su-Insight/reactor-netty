@@ -182,32 +182,7 @@ You can find more about `Netty` channel options at the following links:
 include::wire-logger.adoc[]
 
 [[server-tcp-level-configurations-event-loop-group]]
-=== Event Loop Group
-
-By default, the `TCP` server uses an "`Event Loop Group,`" where the number of the worker threads equals the number of
-processors available to the runtime on initialization (but with a minimum value of 4). When you need a different configuration,
-you can use one of the {javadoc}/reactor/netty/resources/LoopResources.html[LoopResource]`#create`
-methods.
-
-The default configuration for the `Event Loop Group` is the following:
-
-====
-[source,java,indent=0]
-.{sourcedir}/reactor/netty/ReactorNetty.java
-----
-include::{sourcedir}/reactor/netty/ReactorNetty.java[lines=86..120]
-----
-====
-
-If changes to the these settings are needed, you can apply the following configuration:
-
-====
-[source,java,indent=0]
-.{examplesdir}/eventloop/Application.java
-----
-include::{examplesdir}/eventloop/Application.java[lines=18..35]
-----
-====
+include::eventloop.adoc[]
 
 == SSL and TLS
 
@@ -253,11 +228,16 @@ The following table provides information for the TCP server metrics:
 [width="100%",options="header"]
 |=======
 | metric name | type | description
-| reactor.netty.tcp.server.connections.total | Gauge | The number of all opened connections
-| reactor.netty.tcp.server.data.received | DistributionSummary | Amount of the data received, in bytes
-| reactor.netty.tcp.server.data.sent | DistributionSummary | Amount of the data sent, in bytes
-| reactor.netty.tcp.server.errors | Counter | Number of errors that occurred
-| reactor.netty.tcp.server.tls.handshake.time | Timer | Time spent for TLS handshake
+| reactor.netty.tcp.server.connections.total | Gauge | The number of all opened connections.
+See <<observability-metrics-connections-total>>
+| reactor.netty.tcp.server.data.received | DistributionSummary | Amount of the data received, in bytes.
+See <<observability-metrics-data-received>>
+| reactor.netty.tcp.server.data.sent | DistributionSummary | Amount of the data sent, in bytes.
+See <<observability-metrics-data-sent>>
+| reactor.netty.tcp.server.errors | Counter | Number of errors that occurred.
+See <<observability-metrics-errors-count>>
+| reactor.netty.tcp.server.tls.handshake.time | Timer | Time spent for TLS handshake.
+See <<observability-metrics-tls-handshake-time>>
 |=======
 
 These additional metrics are also available:
@@ -287,6 +267,60 @@ include::{examplesdir}/metrics/custom/Application.java[lines=18..35]
 ----
 <1> Enables TCP server metrics and provides {javadoc}/reactor/netty/channel/ChannelMetricsRecorder.html[`ChannelMetricsRecorder`] implementation.
 ====
+
+== Tracing
+The TCP server supports built-in integration with https://micrometer.io/docs/tracing[`Micrometer Tracing`].
+
+The following table provides information for the TCP server spans:
+
+[width="100%",options="header"]
+|=======
+| contextual name | description
+| tls handshake | Information and time spent for TLS handshake.
+See <<observability-spans-tls-handshake-span>>.
+|=======
+
+The following example enables that integration. This concrete example uses `Brave` and reports the information to `Zipkin`.
+See the https://micrometer.io/docs/tracing#_micrometer_tracing_opentelemetry_setup[`Micrometer Tracing`] documentation for `OpenTelemetry` setup.
+
+====
+[source,java,indent=0]
+.{examplesdir}/tracing/Application.java
+----
+include::{examplesdir}/tracing/Application.java[lines=18..81]
+----
+<1> Initializes Brave, Zipkin, and the Observation registry.
+<2> Enables the built-in integration with Micrometer.
+====
+
+The result in `Zipkin` looks like:
+
+image::images/tcp-server-tracing.png[]
+
+=== Access Current Observation
+Project Micrometer provides https://micrometer.io/docs/contextPropagation[`a library`] that assists with context propagation across
+different types of context mechanisms such as `ThreadLocal`, `Reactor Context` and others.
+
+The following example shows how to use this library in a custom `ChannelHandler`:
+
+====
+[source,java,indent=0]
+.{examplesdir}/tracing/custom/Application.java
+----
+include::{examplesdir}/tracing/custom/Application.java[lines=18..86]
+----
+<1> Initializes Brave, Zipkin, and the Observation registry.
+<2> Enables the built-in integration with Micrometer.
+<3> Custom `ChannelHandler` that uses context propagation library. This concrete example overrides only
+`ChannelInboundHandlerAdapter#channelActive`, if it is needed, the same logic can be used for the rest of the methods.
+Also, this concrete example sets all `ThreadLocal` values for which there is a value in the given `Channel`,
+if another behaviour is needed please check https://micrometer.io/docs/contextPropagation[`context propagation library API`].
+For example, you may want to set only some of the `ThreadLocal` values.
+====
+
+NOTE: When you enable Reactor Netty tracing within a framework, you may need to let Reactor Netty use the `ObservationRegistry` created by this framework.
+For this purpose you need to invoke {javadoc}/reactor/netty/Metrics.html#observationRegistry-io.micrometer.observation.ObservationRegistry-[`reactor.netty.Metrics#observationRegistry`].
+You may also need to configure the Reactor Netty `ObservationHandlers` using the API provided by the framework.
 
 == Unix Domain Sockets
 The `TCP` server supports Unix Domain Sockets (UDS) when native transport is in use.

@@ -136,6 +136,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatExceptionOfType;
 
 /**
+ * This test class verifies {@link HttpClient}.
+ *
  * @author Stephane Maldini
  * @since 0.6
  */
@@ -774,7 +776,7 @@ class HttpClientTest extends BaseHttpTest {
 	}
 
 	@Test
-	@SuppressWarnings("CollectionUndefinedEquality")
+	@SuppressWarnings({"CollectionUndefinedEquality", "deprecation"})
 	void testCookie() {
 		disposableServer =
 				createServer()
@@ -1689,6 +1691,7 @@ class HttpClientTest extends BaseHttpTest {
 	}
 
 	@Test
+	@SuppressWarnings("deprecation")
 	void httpClientResponseConfigInjectAttributes() {
 		AtomicReference<Channel> channelRef = new AtomicReference<>();
 		AtomicBoolean validate = new AtomicBoolean();
@@ -3006,7 +3009,7 @@ class HttpClientTest extends BaseHttpTest {
 
 			assertThat(resolversInternal.get()).isNotNull();
 			assertThat(resolversInternal.get().get(0)).isSameAs(resolversInternal.get().get(1));
-			assertThat(resolversInternal.get().get(0).getClass().getSimpleName()).isEqualTo("AddressResolverGroupMetrics");
+			assertThat(resolversInternal.get().get(0).getClass().getSimpleName()).isEqualTo("MicrometerAddressResolverGroupMetrics");
 		}
 		finally {
 			// Closing the executor cleans the AddressResolverGroup internal structures and closes the resolver

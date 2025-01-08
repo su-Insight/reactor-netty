@@ -48,6 +48,8 @@ include::{examplesdir}/address/Application.java[lines=18..34]
 <2> Configures the `UDP` server port
 ====
 
+NOTE: The port can be specified also with *PORT* environment variable.
+
 == Eager Initialization
 
 By default, the initialization of the `UdpServer` resources happens on demand. This means that the `bind
@@ -166,32 +168,7 @@ For more information about Netty channel options, see the following links:
 include::wire-logger.adoc[]
 
 [[server-udp-connection-configurations-event-loop-group]]
-=== Event Loop Group
-
-By default, the UDP server uses "`Event Loop Group,`" where the number of the worker threads equals the number of
-processors available to the runtime on initialization (but with a minimum value of 4). When you need a different configuration,
-you can use one of the {javadoc}/reactor/netty/resources/LoopResources.html[LoopResource]`#create`
-methods.
-
-The default configuration for the "`Event Loop Group`" is the following:
-
-====
-[source,java,indent=0]
-.{sourcedir}/reactor/netty/ReactorNetty.java
-----
-include::{sourcedir}/reactor/netty/ReactorNetty.java[lines=86..120]
-----
-====
-
-If you need changes to these settings, you can apply the following configuration:
-
-====
-[source,java,indent=0]
-.{examplesdir}/eventloop/Application.java
-----
-include::{examplesdir}/eventloop/Application.java[lines=18..36]
-----
-====
+include::eventloop.adoc[]
 
 == Metrics
 The UDP server supports built-in integration with https://micrometer.io/[`Micrometer`].
@@ -202,9 +179,12 @@ The following table provides information for the UDP server metrics:
 [width="100%",options="header"]
 |=======
 | metric name | type | description
-| reactor.netty.udp.server.data.received | DistributionSummary | Amount of the data received, in bytes
-| reactor.netty.udp.server.data.sent | DistributionSummary | Amount of the data sent, in bytes
-| reactor.netty.udp.server.errors | Counter | Number of errors that occurred
+| reactor.netty.udp.server.data.received | DistributionSummary | Amount of the data received, in bytes.
+See <<observability-metrics-data-received>>
+| reactor.netty.udp.server.data.sent | DistributionSummary | Amount of the data sent, in bytes.
+See <<observability-metrics-data-sent>>
+| reactor.netty.udp.server.errors | Counter | Number of errors that occurred.
+See <<observability-metrics-errors-count>>
 |=======
 
 These additional metrics are also available:

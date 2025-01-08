@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2022 VMware, Inc. or its affiliates, All Rights Reserved.
+ * Copyright (c) 2019-2024 VMware, Inc. or its affiliates, All Rights Reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -45,6 +45,7 @@ import java.util.function.Function;
 import static org.assertj.core.api.Assertions.assertThat;
 import static reactor.netty.Metrics.ACTIVE_CONNECTIONS;
 import static reactor.netty.Metrics.ACTIVE_STREAMS;
+import static reactor.netty.Metrics.ERROR;
 import static reactor.netty.Metrics.MAX_CONNECTIONS;
 import static reactor.netty.Metrics.CONNECTION_PROVIDER_PREFIX;
 import static reactor.netty.Metrics.IDLE_CONNECTIONS;
@@ -52,10 +53,16 @@ import static reactor.netty.Metrics.PENDING_CONNECTIONS;
 import static reactor.netty.Metrics.MAX_PENDING_CONNECTIONS;
 import static reactor.netty.Metrics.NAME;
 import static reactor.netty.Metrics.PENDING_STREAMS;
+import static reactor.netty.Metrics.STATUS;
 import static reactor.netty.Metrics.TOTAL_CONNECTIONS;
 import static reactor.netty.http.client.HttpClientState.STREAM_CONFIGURED;
+import static reactor.netty.micrometer.GaugeAssert.assertGauge;
+import static reactor.netty.micrometer.TimerAssert.assertTimer;
+import static reactor.netty.resources.ConnectionProviderMeters.PENDING_CONNECTIONS_TIME;
 
 /**
+ * This test class verifies {@link ConnectionProvider} metrics functionality.
+ *
  * @author Violeta Georgieva
  */
 class PooledConnectionProviderDefaultMetricsTest extends BaseHttpTest {
@@ -206,21 +213,21 @@ class PooledConnectionProviderDefaultMetricsTest extends BaseHttpTest {
 		assertThat(latch.await(30, TimeUnit.SECONDS)).as("latch await").isTrue();
 		assertThat(metrics.get()).isTrue();
 		if (isSecured) {
-			assertThat(getGaugeValue(CONNECTION_PROVIDER_PREFIX + TOTAL_CONNECTIONS, poolName)).isEqualTo(1);
-			assertThat(getGaugeValue(CONNECTION_PROVIDER_PREFIX + ACTIVE_CONNECTIONS, poolName)).isEqualTo(1);
-			assertThat(getGaugeValue(CONNECTION_PROVIDER_PREFIX + ACTIVE_CONNECTIONS, "http2." + poolName)).isEqualTo(0);
-			assertThat(getGaugeValue(CONNECTION_PROVIDER_PREFIX + IDLE_CONNECTIONS, "http2." + poolName)).isEqualTo(1);
-			assertThat(getGaugeValue(CONNECTION_PROVIDER_PREFIX + ACTIVE_STREAMS, "http2." + poolName)).isEqualTo(0);
-			assertThat(getGaugeValue(CONNECTION_PROVIDER_PREFIX + PENDING_STREAMS, "http2." + poolName)).isEqualTo(0);
+			assertGauge(registry, CONNECTION_PROVIDER_PREFIX + TOTAL_CONNECTIONS, NAME, poolName).hasValueEqualTo(1);
+			assertGauge(registry, CONNECTION_PROVIDER_PREFIX + ACTIVE_CONNECTIONS, NAME, poolName).hasValueEqualTo(1);
+			assertGauge(registry, CONNECTION_PROVIDER_PREFIX + ACTIVE_CONNECTIONS, NAME, "http2." + poolName).hasValueEqualTo(0);
+			assertGauge(registry, CONNECTION_PROVIDER_PREFIX + IDLE_CONNECTIONS, NAME, "http2." + poolName).hasValueEqualTo(1);
+			assertGauge(registry, CONNECTION_PROVIDER_PREFIX + ACTIVE_STREAMS, NAME, "http2." + poolName).hasValueEqualTo(0);
+			assertGauge(registry, CONNECTION_PROVIDER_PREFIX + PENDING_STREAMS, NAME, "http2." + poolName).hasValueEqualTo(0);
 		}
 		else {
-			assertThat(getGaugeValue(CONNECTION_PROVIDER_PREFIX + TOTAL_CONNECTIONS, poolName)).isEqualTo(0);
-			assertThat(getGaugeValue(CONNECTION_PROVIDER_PREFIX + ACTIVE_CONNECTIONS, poolName)).isEqualTo(0);
+			assertGauge(registry, CONNECTION_PROVIDER_PREFIX + TOTAL_CONNECTIONS, NAME, poolName).hasValueEqualTo(0);
+			assertGauge(registry, CONNECTION_PROVIDER_PREFIX + ACTIVE_CONNECTIONS, NAME, poolName).hasValueEqualTo(0);
 		}
-		assertThat(getGaugeValue(CONNECTION_PROVIDER_PREFIX + IDLE_CONNECTIONS, poolName)).isEqualTo(0);
-		assertThat(getGaugeValue(CONNECTION_PROVIDER_PREFIX + PENDING_CONNECTIONS, poolName)).isEqualTo(0);
-		assertThat(getGaugeValue(CONNECTION_PROVIDER_PREFIX + MAX_CONNECTIONS, poolName)).isEqualTo(expectedMaxConnection);
-		assertThat(getGaugeValue(CONNECTION_PROVIDER_PREFIX + MAX_PENDING_CONNECTIONS, poolName)).isEqualTo(expectedMaxPendingAcquire);
+		assertGauge(registry, CONNECTION_PROVIDER_PREFIX + IDLE_CONNECTIONS, NAME, poolName).hasValueEqualTo(0);
+		assertGauge(registry, CONNECTION_PROVIDER_PREFIX + PENDING_CONNECTIONS, NAME, poolName).hasValueEqualTo(0);
+		assertGauge(registry, CONNECTION_PROVIDER_PREFIX + MAX_CONNECTIONS, NAME, poolName).hasValueEqualTo(expectedMaxConnection);
+		assertGauge(registry, CONNECTION_PROVIDER_PREFIX + MAX_PENDING_CONNECTIONS, NAME, poolName).hasValueEqualTo(expectedMaxPendingAcquire);
 	}
 
 	@Test
@@ -287,14 +294,66 @@ class PooledConnectionProviderDefaultMetricsTest extends BaseHttpTest {
 
 			assertThat(latch.await(30, TimeUnit.SECONDS)).isTrue();
 
-			assertThat(getGaugeValue(CONNECTION_PROVIDER_PREFIX + PENDING_STREAMS, "http2.testConnectionPoolPendingAcquireSize")).isEqualTo(0);
+			assertGauge(registry, CONNECTION_PROVIDER_PREFIX + PENDING_STREAMS, NAME, "http2.testConnectionPoolPendingAcquireSize").hasValueEqualTo(0);
 		}
 		finally {
 			provider.disposeLater()
 					.block(Duration.ofSeconds(30));
 		}
 		// deRegistered
-		assertThat(getGaugeValue(CONNECTION_PROVIDER_PREFIX + PENDING_STREAMS, "http2.testConnectionPoolPendingAcquireSize")).isEqualTo(-1);
+		assertGauge(registry, CONNECTION_PROVIDER_PREFIX + PENDING_STREAMS, NAME, "http2.testConnectionPoolPendingAcquireSize").isNull();
+	}
+
+	@Test
+	void testIssue3060PendingAcquireMaxCountReached() throws Exception {
+		testIssue3060(
+				ConnectionProvider.builder("testIssue3060")
+				                  .maxConnections(1)
+				                  .pendingAcquireMaxCount(1)
+				                  .metrics(true)
+				                  .build());
+	}
+
+	@Test
+	void testIssue3060PendingAcquireTimeoutReached() throws Exception {
+		testIssue3060(
+				ConnectionProvider.builder("testIssue3060")
+				                  .maxConnections(2)
+				                  .pendingAcquireTimeout(Duration.ofMillis(10))
+				                  .metrics(true)
+				                  .build());
+	}
+
+	private void testIssue3060(ConnectionProvider provider) throws Exception {
+		try {
+			disposableServer =
+					createServer().handle((req, res) -> res.header("Connection", "close")
+					                                       .sendString(Mono.just("testIssue3060")
+					                                                       .delayElement(Duration.ofMillis(50))))
+					              .bindNow();
+
+			CountDownLatch latch = new CountDownLatch(1);
+			HttpClient client =
+					createClient(provider, () -> disposableServer.address())
+					        .doOnResponse((res, conn) -> conn.channel().closeFuture().addListener(f -> latch.countDown()));
+
+			Flux.range(0, 3)
+			    .flatMapDelayError(i ->
+			        client.get()
+			              .uri("/")
+			              .responseContent()
+			              .aggregate()
+			              .asString(), 256, 32)
+			    .materialize()
+			    .blockLast(Duration.ofSeconds(30));
+
+			assertThat(latch.await(30, TimeUnit.SECONDS)).as("latch await").isTrue();
+			assertTimer(registry, PENDING_CONNECTIONS_TIME.getName(), NAME, "testIssue3060", STATUS, ERROR).hasCountEqualTo(1);
+		}
+		finally {
+			provider.disposeLater()
+			        .block(Duration.ofSeconds(5));
+		}
 	}
 
 	private double getGaugeValue(String gaugeName, String poolName) {

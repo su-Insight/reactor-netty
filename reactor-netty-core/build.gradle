@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020-2023 VMware, Inc. or its affiliates, All Rights Reserved.
+ * Copyright (c) 2020-2024 VMware, Inc. or its affiliates, All Rights Reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -110,6 +110,7 @@ dependencies {
 
 	//Metrics
 	compileOnly "io.micrometer:micrometer-core:$micrometerVersion"
+	compileOnly "io.micrometer:micrometer-tracing:$micrometerTracingVersion"
 	compileOnly "io.micrometer:context-propagation:$contextPropagationVersion"
 
 	// Logging
@@ -136,12 +137,17 @@ dependencies {
 	testImplementation "ch.qos.logback:logback-classic:$logbackVersion"
 	testImplementation "io.projectreactor.tools:blockhound-junit-platform:$blockHoundVersion"
 	testImplementation "io.micrometer:micrometer-core:$micrometerVersion"
+	testImplementation "org.reflections:reflections:$reflectionsVersion"
 
 	testRuntimeOnly "org.junit.platform:junit-platform-launcher:$junitPlatformLauncherVersion"
 	testRuntimeOnly "org.junit.jupiter:junit-jupiter-engine:$junitVersion"
 	testRuntimeOnly "org.slf4j:jcl-over-slf4j:$slf4jVersion"
 
+	// JSR-305 annotations
+	testFixturesCompileOnly "com.google.code.findbugs:jsr305:$jsr305Version"
 	testFixturesApi("ch.qos.logback:logback-classic:$logbackVersion")
+	testFixturesApi("io.micrometer:micrometer-core:$micrometerVersion")
+	testFixturesApi("org.assertj:assertj-core:$assertJVersion")
 
 	for (dependency in project.configurations.shaded.dependencies) {
 		compileOnly(dependency)
@@ -158,6 +164,7 @@ dependencies {
 	contextPropagationTestImplementation "org.junit.jupiter:junit-jupiter-api:$junitVersion"
 	contextPropagationTestImplementation "org.junit.jupiter:junit-jupiter-params:$junitVersion"
 	contextPropagationTestImplementation "ch.qos.logback:logback-classic:$logbackVersion"
+	contextPropagationTestImplementation "io.micrometer:micrometer-core:$micrometerVersion"
 	contextPropagationTestImplementation "io.micrometer:context-propagation:$contextPropagationVersion"
 	contextPropagationTestRuntimeOnly "org.junit.jupiter:junit-jupiter-engine:$junitVersion"
 }
@@ -243,13 +250,6 @@ tasks.japicmp.dependsOn(downloadBaseline)
 
 tasks.check.dependsOn(japicmp)
 
-task contextPropagationTest(type: Test) {
-	testClassesDirs = sourceSets.contextPropagationTest.output.classesDirs
-	classpath = sourceSets.contextPropagationTest.runtimeClasspath
-}
-
-tasks.check.dependsOn(contextPropagationTest)
-
 shadowJar {
 	configure {
 		it.convention.plugins.bundle = new BundleTaskConvention(it)
@@ -315,6 +315,13 @@ task jarFileTest(type: Test) {
 }
 
 tasks.check.dependsOn(jarFileTest)
+
+task contextPropagationTest(type: Test) {
+	testClassesDirs = sourceSets.contextPropagationTest.output.classesDirs
+	classpath = sourceSets.contextPropagationTest.runtimeClasspath
+}
+
+tasks.check.dependsOn(contextPropagationTest)
 
 task shadedJarTest(type: Test) {
 	testClassesDirs = sourceSets.test.output.classesDirs

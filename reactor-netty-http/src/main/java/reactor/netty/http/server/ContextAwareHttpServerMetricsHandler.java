@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021-2022 VMware, Inc. or its affiliates, All Rights Reserved.
+ * Copyright (c) 2021-2023 VMware, Inc. or its affiliates, All Rights Reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -22,6 +22,8 @@ import java.time.Duration;
 import java.util.function.Function;
 
 /**
+ * {@link AbstractHttpServerMetricsHandler} that propagates {@link ContextView}.
+ *
  * @author Violeta Georgieva
  * @since 1.0.8
  */
@@ -29,9 +31,11 @@ final class ContextAwareHttpServerMetricsHandler extends AbstractHttpServerMetri
 
 	final ContextAwareHttpServerMetricsRecorder recorder;
 
-	ContextAwareHttpServerMetricsHandler(ContextAwareHttpServerMetricsRecorder recorder,
+	ContextAwareHttpServerMetricsHandler(
+			ContextAwareHttpServerMetricsRecorder recorder,
+			@Nullable Function<String, String> methodTagValue,
 			@Nullable Function<String, String> uriTagValue) {
-		super(uriTagValue);
+		super(methodTagValue, uriTagValue);
 		this.recorder = recorder;
 	}
 

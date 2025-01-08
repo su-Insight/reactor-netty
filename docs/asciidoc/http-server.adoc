@@ -315,7 +315,7 @@ By default, the `HTTP` server is configured with the following settings:
 [source,java,indent=0]
 .{sourcedir}/reactor/netty/http/HttpDecoderSpec.java
 ----
-include::{sourcedir}/reactor/netty/http/HttpDecoderSpec.java[lines=29..34]
+include::{sourcedir}/reactor/netty/http/HttpDecoderSpec.java[lines=28..39]
 ----
 ====
 ====
@@ -382,6 +382,8 @@ include::{examplesdir}/channeloptions/Application.java[lines=18..33]
 See <<tcp-server>> for more detail about TCP-level configuration.
 
 include::wire-logger.adoc[]
+
+include::eventloop.adoc[]
 
 == SSL and TLS
 
@@ -562,14 +564,23 @@ The following table provides information for the HTTP server metrics:
 |=======
 | metric name | type | description
 | reactor.netty.http.server.streams.active | Gauge | The number of active HTTP/2 streams.
-| reactor.netty.http.server.connections.active | Gauge | The number of http connections currently processing requests
-| reactor.netty.http.server.connections.total | Gauge | The number of all opened connections
-| reactor.netty.http.server.data.received | DistributionSummary | Amount of the data received, in bytes
-| reactor.netty.http.server.data.sent | DistributionSummary | Amount of the data sent, in bytes
-| reactor.netty.http.server.errors | Counter | Number of errors that occurred
-| reactor.netty.http.server.data.received.time | Timer | Time spent in consuming incoming data
-| reactor.netty.http.server.data.sent.time | Timer | Time spent in sending outgoing data
+See <<observability-metrics-streams-active>>
+| reactor.netty.http.server.connections.active | Gauge | The number of http connections currently processing requests.
+See <<observability-metrics-connections-active>>
+| reactor.netty.http.server.connections.total | Gauge | The number of all opened connections.
+See <<observability-metrics-connections-total>>
+| reactor.netty.http.server.data.received | DistributionSummary | Amount of the data received, in bytes.
+See <<observability-metrics-data-received>>
+| reactor.netty.http.server.data.sent | DistributionSummary | Amount of the data sent, in bytes.
+See <<observability-metrics-data-sent>>
+| reactor.netty.http.server.errors | Counter | Number of errors that occurred.
+See <<observability-metrics-errors-count>>
+| reactor.netty.http.server.data.received.time | Timer | Time spent in consuming incoming data.
+See <<observability-metrics-http-server-data-received-time>>
+| reactor.netty.http.server.data.sent.time | Timer | Time spent in sending outgoing data.
+See <<observability-metrics-http-server-data-sent-time>>
 | reactor.netty.http.server.response.time | Timer | Total time for the request/response
+See <<observability-metrics-http-server-response-time>>
 |=======
 
 These additional metrics are also available:
@@ -608,6 +619,62 @@ include::{examplesdir}/metrics/custom/Application.java[lines=18..41]
 <1> Enables HTTP server metrics and provides {javadoc}/reactor/netty/http/server/HttpServerMetricsRecorder.html[`HttpServerMetricsRecorder`] implementation.
 ====
 
+== Tracing
+The HTTP server supports built-in integration with https://micrometer.io/docs/tracing[`Micrometer Tracing`].
+
+The following table provides information for the HTTP server spans:
+
+[width="100%",options="header"]
+|=======
+| contextual name | description
+| <HTTP METHOD>_<URI> | Information and total time for the request.
+See <<observability-spans-http-server-response-span>>.
+|=======
+
+The following example enables that integration. This concrete example uses `Brave` and reports the information to `Zipkin`.
+See the https://micrometer.io/docs/tracing#_micrometer_tracing_opentelemetry_setup[`Micrometer Tracing`] documentation for `OpenTelemetry` setup.
+
+====
+[source,java,indent=0]
+.{examplesdir}/tracing/Application.java
+----
+include::{examplesdir}/tracing/Application.java[lines=18..91]
+----
+<1> Initializes Brave, Zipkin, and the Observation registry.
+<2> Templated URIs are used as an URI tag value when possible.
+<3> Enables the built-in integration with Micrometer.
+====
+
+The result in `Zipkin` looks like:
+
+image::images/http-server-tracing.png[]
+
+=== Access Current Observation
+Project Micrometer provides https://micrometer.io/docs/contextPropagation[`a library`] that assists with context propagation across
+different types of context mechanisms such as `ThreadLocal`, `Reactor Context` and others.
+
+The following example shows how to use this library in a custom `ChannelHandler`:
+
+====
+[source,java,indent=0]
+.{examplesdir}/tracing/custom/Application.java
+----
+include::{examplesdir}/tracing/custom/Application.java[lines=18..85]
+----
+<1> Initializes Brave, Zipkin, and the Observation registry.
+<2> Templated URIs are used as an URI tag value when possible.
+<3> Enables the built-in integration with Micrometer.
+<4> Custom `ChannelHandler` that uses context propagation library. This concrete example overrides only
+`ChannelOutboundHandlerAdapter#write`, if it is needed, the same logic can be used for the rest of the methods.
+Also, this concrete example sets all `ThreadLocal` values for which there is a value in the given `Channel`,
+if another behaviour is needed please check https://micrometer.io/docs/contextPropagation[`context propagation library API`].
+For example, you may want to set only some of the `ThreadLocal` values.
+====
+
+NOTE: When you enable Reactor Netty tracing within a framework, you may need to let Reactor Netty use the `ObservationRegistry` created by this framework.
+For this purpose you need to invoke {javadoc}/reactor/netty/Metrics.html#observationRegistry-io.micrometer.observation.ObservationRegistry-[`reactor.netty.Metrics#observationRegistry`].
+You may also need to configure the Reactor Netty `ObservationHandlers` using the API provided by the framework.
+
 == Unix Domain Sockets
 The `HTTP` server supports Unix Domain Sockets (UDS) when native transport is in use.
 
@@ -620,4 +687,83 @@ The following example shows how to use UDS support:
 include::{examplesdir}/uds/Application.java[lines=18..33]
 ----
 <1> Specifies `DomainSocketAddress` that will be used
+====
+
+[[http-server-timeout-configuration]]
+== Timeout Configuration
+This section describes various timeout configuration options that can be used in `HttpServer`.
+Configuring a proper timeout may improve or solve issues in the communication process.
+The configuration options can be grouped as follows:
+
+* <<http-server-request-timeout>>
+* <<http-server-connection-timeout>>
+* <<http-server-ssl-tls-timeout>>
+
+[[http-server-request-timeout]]
+=== Request Timeout
+The following listing shows all available request timeout configuration options.
+
+* `readTimeout` - the maximum time between each network-level read operation while reading a given request content (resolution: ms)
+* `requestTimeout` - the maximum time for reading a given request content (resolution: ms).
+
+NOTE: It is always a good practice to configure a read/request timeout.
+
+To customize the default settings, you can configure `HttpServer` as follows:
+
+====
+[source,java,indent=0]
+.{examplesdir}/read/timeout/Application.java
+----
+include::{examplesdir}/read/timeout/Application.java[lines=18..36]
+----
+<1> Configures the read timeout to 5 second.
+<2> Configures the request timeout to 30 second.
+====
+
+[[http-server-connection-timeout]]
+=== Connection Timeout
+The following listing shows all available connection timeout configuration options.
+
+* `idleTimeout` - The maximum time (resolution: ms) that this connection stays opened and waits for HTTP request.
+Once the timeout is reached, the connection is closed. By default,
+{javadoc}/reactor/netty/http/server/HttpServer.html#idleTimeout-java.time.Duration-[`idleTimeout`] is not specified,
+this indicates no timeout (i.e. infinite), which means the connection is closed only if one of the peers decides to close it explicitly.
+
+NOTE: It is always a good practice to configure an idle timeout.
+
+To customize the default settings, you can configure `HttpServer` as follows:
+
+====
+[source,java,indent=0]
+.{examplesdir}/idle/timeout/Application.java
+----
+include::{examplesdir}/idle/timeout/Application.java[lines=18..35]
+----
+<1> Configures the default idle timeout to 1 second.
+====
+
+[[http-server-ssl-tls-timeout]]
+=== SSL/TLS Timeout
+`HttpServer` supports the SSL/TLS functionality provided by Netty.
+
+The following list describes the available timeout configuration options:
+
+* `handshakeTimeout` - Use this option to configure the SSL handshake timeout (resolution: ms). Default: 10s.
+
+NOTE: You should consider increasing the SSL handshake timeout when expecting slow network connections.
+
+* `closeNotifyFlushTimeout` - Use this option to configure the SSL `close_notify` flush timeout (resolution: ms). Default: 3s.
+* `closeNotifyReadTimeout` - Use this option to configure the SSL `close_notify` read timeout (resolution: ms). Default: 0s.
+
+To customize the default settings, you can configure `HttpServer` as follows:
+
+====
+[source,java,indent=0]
+.{examplesdir}/security/custom/Application.java
+----
+include::{examplesdir}/security/custom/Application.java[lines=18..44]
+----
+<1> Configures the SSL handshake timeout to 30 seconds.
+<2> Configures the SSL `close_notify` flush timeout to 10 seconds.
+<3> Configures the SSL `close_notify` read timeout to 10 seconds.
 ====
