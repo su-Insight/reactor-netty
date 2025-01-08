@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021-2022 VMware, Inc. or its affiliates, All Rights Reserved.
+ * Copyright (c) 2021-2024 VMware, Inc. or its affiliates, All Rights Reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,12 +17,15 @@ package reactor.netty.http.client;
 
 import io.netty.channel.ChannelHandlerContext;
 import reactor.util.annotation.Nullable;
+import reactor.util.context.ContextView;
 
 import java.net.SocketAddress;
 import java.time.Duration;
 import java.util.function.Function;
 
 /**
+ * {@link AbstractHttpClientMetricsHandler} that propagates {@link ContextView}.
+ *
  * @author Violeta Georgieva
  * @since 1.0.8
  */
@@ -31,8 +34,9 @@ final class ContextAwareHttpClientMetricsHandler extends AbstractHttpClientMetri
 	final ContextAwareHttpClientMetricsRecorder recorder;
 
 	ContextAwareHttpClientMetricsHandler(ContextAwareHttpClientMetricsRecorder recorder,
+			SocketAddress remoteAddress,
 			@Nullable Function<String, String> uriTagValue) {
-		super(uriTagValue);
+		super(remoteAddress, uriTagValue);
 		this.recorder = recorder;
 	}
 
@@ -49,7 +53,7 @@ final class ContextAwareHttpClientMetricsHandler extends AbstractHttpClientMetri
 	@Override
 	protected void recordException(ChannelHandlerContext ctx) {
 		if (contextView != null) {
-			recorder().incrementErrorsCount(contextView, ctx.channel().remoteAddress(), path);
+			recorder().incrementErrorsCount(contextView, remoteAddress, path);
 		}
 		else {
 			super.recordException(ctx);
@@ -59,8 +63,7 @@ final class ContextAwareHttpClientMetricsHandler extends AbstractHttpClientMetri
 	@Override
 	protected void recordWrite(SocketAddress address) {
 		if (contextView != null) {
-			recorder.recordDataSentTime(contextView, address,
-					path, method,
+			recorder.recordDataSentTime(contextView, address, path, method,
 					Duration.ofNanos(System.nanoTime() - dataSentTime));
 
 			recorder.recordDataSent(contextView, address, path, dataSent);
@@ -73,12 +76,10 @@ final class ContextAwareHttpClientMetricsHandler extends AbstractHttpClientMetri
 	@Override
 	protected void recordRead(SocketAddress address) {
 		if (contextView != null) {
-			recorder.recordDataReceivedTime(contextView, address,
-					path, method, status,
+			recorder.recordDataReceivedTime(contextView, address, path, method, status,
 					Duration.ofNanos(System.nanoTime() - dataReceivedTime));
 
-			recorder.recordResponseTime(contextView, address,
-					path, method, status,
+			recorder.recordResponseTime(contextView, address, path, method, status,
 					Duration.ofNanos(System.nanoTime() - dataSentTime));
 
 			recorder.recordDataReceived(contextView, address, path, dataReceived);

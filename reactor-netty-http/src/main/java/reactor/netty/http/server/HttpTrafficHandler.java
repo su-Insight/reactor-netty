@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011-2023 VMware, Inc. or its affiliates, All Rights Reserved.
+ * Copyright (c) 2011-2024 VMware, Inc. or its affiliates, All Rights Reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -148,7 +148,9 @@ final class HttpTrafficHandler extends ChannelDuplexHandler
 		}
 		// read message and track if it was keepAlive
 		if (msg instanceof HttpRequest) {
-			IdleTimeoutHandler.removeIdleTimeoutHandler(ctx.pipeline());
+			if (idleTimeout != null) {
+				IdleTimeoutHandler.removeIdleTimeoutHandler(ctx.pipeline());
+			}
 
 			final HttpRequest request = (HttpRequest) msg;
 
@@ -360,6 +362,8 @@ final class HttpTrafficHandler extends ChannelDuplexHandler
 				   .execute(this);
 			}
 			else {
+				IdleTimeoutHandler.addIdleTimeoutHandler(ctx.pipeline(), idleTimeout);
+
 				ctx.read();
 			}
 			return;
@@ -458,8 +462,6 @@ final class HttpTrafficHandler extends ChannelDuplexHandler
 				        "Last HTTP packet was sent, terminating the channel"));
 			}
 		}
-
-		IdleTimeoutHandler.addIdleTimeoutHandler(future.channel().pipeline(), idleTimeout);
 
 		HttpServerOperations.cleanHandlerTerminate(future.channel());
 	}

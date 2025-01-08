@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017-2023 VMware, Inc. or its affiliates, All Rights Reserved.
+ * Copyright (c) 2017-2024 VMware, Inc. or its affiliates, All Rights Reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -40,6 +40,8 @@ import java.util.Arrays;
 import java.util.stream.Stream;
 
 /**
+ * This test class verifies HTTP response status handling.
+ *
  * @author Violeta Georgieva
  */
 class HttpResponseStatusCodesHandlingTests extends BaseHttpTest {
@@ -64,7 +66,8 @@ class HttpResponseStatusCodesHandlingTests extends BaseHttpTest {
 
 		StepVerifier.create(content)
 				    .expectNext(404)
-				    .verifyComplete();
+				    .expectComplete()
+				    .verify(Duration.ofSeconds(5));
 	}
 
 	@ParameterizedTest

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020-2022 VMware, Inc. or its affiliates, All Rights Reserved.
+ * Copyright (c) 2020-2023 VMware, Inc. or its affiliates, All Rights Reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -51,6 +51,8 @@ import static org.assertj.core.api.Assertions.assertThatExceptionOfType;
 import static org.junit.jupiter.api.condition.OS.WINDOWS;
 
 /**
+ * This test class verifies {@link ClientTransport}.
+ *
  * @author Violeta Georgieva
  */
 class ClientTransportTest {
@@ -238,7 +240,7 @@ class ClientTransportTest {
 	}
 
 	/**
-	 * On Windows OS it is rare to have hosts file
+	 * On Windows OS it is rare to have hosts file.
 	 */
 	@Test
 	@DisabledOnOs(WINDOWS)
@@ -247,7 +249,7 @@ class ClientTransportTest {
 	}
 
 	/**
-	 * On Windows OS it is rare to have hosts file
+	 * On Windows OS it is rare to have hosts file.
 	 */
 	@Test
 	@DisabledOnOs(WINDOWS)
