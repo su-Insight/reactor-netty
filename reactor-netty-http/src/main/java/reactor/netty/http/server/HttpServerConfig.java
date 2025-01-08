@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020-2023 VMware, Inc. or its affiliates, All Rights Reserved.
+ * Copyright (c) 2020-2024 VMware, Inc. or its affiliates, All Rights Reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -24,6 +24,7 @@ import io.netty.channel.ChannelOption;
 import io.netty.channel.ChannelPipeline;
 import io.netty.channel.ChannelPromise;
 import io.netty.handler.codec.haproxy.HAProxyMessageDecoder;
+import io.netty.handler.codec.http.HttpDecoderConfig;
 import io.netty.handler.codec.http.HttpHeaderNames;
 import io.netty.handler.codec.http.HttpRequest;
 import io.netty.handler.codec.http.HttpServerCodec;
@@ -141,7 +142,7 @@ public final class HttpServerConfig extends ServerTransportConfig<HttpServerConf
 	}
 
 	/**
-	 * Return the HTTP/2 configuration
+	 * Return the HTTP/2 configuration.
 	 *
 	 * @return the HTTP/2 configuration
 	 */
@@ -171,7 +172,7 @@ public final class HttpServerConfig extends ServerTransportConfig<HttpServerConf
 	}
 
 	/**
-	 * Returns true if that {@link HttpServer} secured via SSL transport
+	 * Returns true if that {@link HttpServer} secured via SSL transport.
 	 *
 	 * @return true if that {@link HttpServer} secured via SSL transport
 	 */
@@ -183,8 +184,8 @@ public final class HttpServerConfig extends ServerTransportConfig<HttpServerConf
 	 * The configured maximum number of HTTP/1.1 requests which can be served until the connection is closed by the server.
 	 *
 	 * @return the configured maximum number of HTTP/1.1 requests which can be served until the connection is closed by the server.
-	 * @see HttpServer#maxKeepAliveRequests(int)
 	 * @since 1.0.13
+	 * @see HttpServer#maxKeepAliveRequests(int)
 	 */
 	public int maxKeepAliveRequests() {
 		return maxKeepAliveRequests;
@@ -245,7 +246,7 @@ public final class HttpServerConfig extends ServerTransportConfig<HttpServerConf
 
 	/**
 	 * Returns the configured function that receives the actual uri and returns the uri tag value
-	 * that will be used for the metrics with {@link reactor.netty.Metrics#URI} tag
+	 * that will be used for the metrics with {@link reactor.netty.Metrics#URI} tag.
 	 *
 	 * @return the configured function that receives the actual uri and returns the uri tag value
 	 * that will be used for the metrics with {@link reactor.netty.Metrics#URI} tag
@@ -272,6 +273,7 @@ public final class HttpServerConfig extends ServerTransportConfig<HttpServerConf
 	BiFunction<? super Mono<Void>, ? super Connection, ? extends Mono<Void>>
 	                                                        mapHandle;
 	int                                                     maxKeepAliveRequests;
+	Function<String, String>                                methodTagValue;
 	int                                                     minCompressionSize;
 	HttpProtocol[]                                          protocols;
 	int                                                     _protocols;
@@ -310,6 +312,7 @@ public final class HttpServerConfig extends ServerTransportConfig<HttpServerConf
 		this.idleTimeout = parent.idleTimeout;
 		this.mapHandle = parent.mapHandle;
 		this.maxKeepAliveRequests = parent.maxKeepAliveRequests;
+		this.methodTagValue = parent.methodTagValue;
 		this.minCompressionSize = parent.minCompressionSize;
 		this.protocols = parent.protocols;
 		this._protocols = parent._protocols;
@@ -414,6 +417,7 @@ public final class HttpServerConfig extends ServerTransportConfig<HttpServerConf
 			HttpMessageLogFactory httpMessageLogFactory,
 			ConnectionObserver listener,
 			@Nullable BiFunction<? super Mono<Void>, ? super Connection, ? extends Mono<Void>> mapHandle,
+			@Nullable Function<String, String> methodTagValue,
 			@Nullable ChannelMetricsRecorder metricsRecorder,
 			int minCompressionSize,
 			ChannelOperations.OnSetup opsFactory,
@@ -455,8 +459,8 @@ public final class HttpServerConfig extends ServerTransportConfig<HttpServerConf
 				}
 				else {
 					handler = metricsRecorder instanceof ContextAwareHttpServerMetricsRecorder ?
-							new ContextAwareHttpServerMetricsHandler((ContextAwareHttpServerMetricsRecorder) metricsRecorder, uriTagValue) :
-							new HttpServerMetricsHandler((HttpServerMetricsRecorder) metricsRecorder, uriTagValue);
+							new ContextAwareHttpServerMetricsHandler((ContextAwareHttpServerMetricsRecorder) metricsRecorder, methodTagValue, uriTagValue) :
+							new HttpServerMetricsHandler((HttpServerMetricsRecorder) metricsRecorder, methodTagValue, uriTagValue);
 				}
 				pipeline.addBefore(NettyPipeline.ReactiveBridge, NettyPipeline.HttpMetricsHandler, handler);
 			}
@@ -513,6 +517,7 @@ public final class HttpServerConfig extends ServerTransportConfig<HttpServerConf
 			@Nullable Duration idleTimeout,
 			ConnectionObserver listener,
 			@Nullable BiFunction<? super Mono<Void>, ? super Connection, ? extends Mono<Void>> mapHandle,
+			@Nullable Function<String, String> methodTagValue,
 			@Nullable ChannelMetricsRecorder metricsRecorder,
 			int minCompressionSize,
 			ChannelOperations.OnSetup opsFactory,
@@ -549,7 +554,7 @@ public final class HttpServerConfig extends ServerTransportConfig<HttpServerConf
 		 .addLast(NettyPipeline.H2MultiplexHandler,
 		          new Http2MultiplexHandler(new H2Codec(accessLogEnabled, accessLog, compressPredicate, cookieDecoder,
 		                  cookieEncoder, formDecoderProvider, forwardedHeaderHandler, httpMessageLogFactory, listener,
-		                  mapHandle, metricsRecorder, minCompressionSize, opsFactory, uriTagValue)));
+		                  mapHandle, methodTagValue, metricsRecorder, minCompressionSize, opsFactory, uriTagValue)));
 
 		IdleTimeoutHandler.addIdleTimeoutHandler(p, idleTimeout);
 
@@ -579,18 +584,24 @@ public final class HttpServerConfig extends ServerTransportConfig<HttpServerConf
 			ConnectionObserver listener,
 			@Nullable BiFunction<? super Mono<Void>, ? super Connection, ? extends Mono<Void>> mapHandle,
 			int maxKeepAliveRequests,
+			@Nullable Function<String, String> methodTagValue,
 			@Nullable ChannelMetricsRecorder metricsRecorder,
 			int minCompressionSize,
 			ChannelOperations.OnSetup opsFactory,
 			@Nullable Function<String, String> uriTagValue) {
+		HttpDecoderConfig decoderConfig = new HttpDecoderConfig();
+		decoderConfig.setMaxInitialLineLength(decoder.maxInitialLineLength())
+		             .setMaxHeaderSize(decoder.maxHeaderSize())
+		             .setMaxChunkSize(decoder.maxChunkSize())
+		             .setValidateHeaders(decoder.validateHeaders())
+		             .setInitialBufferSize(decoder.initialBufferSize())
+		             .setAllowDuplicateContentLengths(decoder.allowDuplicateContentLengths());
 		HttpServerCodec httpServerCodec =
-				new HttpServerCodec(decoder.maxInitialLineLength(), decoder.maxHeaderSize(),
-						decoder.maxChunkSize(), decoder.validateHeaders(), decoder.initialBufferSize(),
-						decoder.allowDuplicateContentLengths());
+				new HttpServerCodec(decoderConfig);
 
 		Http11OrH2CleartextCodec upgrader = new Http11OrH2CleartextCodec(accessLogEnabled, accessLog, compressPredicate,
 				cookieDecoder, cookieEncoder, p.get(NettyPipeline.LoggingHandler) != null, enableGracefulShutdown, formDecoderProvider,
-				forwardedHeaderHandler, http2SettingsSpec, httpMessageLogFactory, listener, mapHandle, metricsRecorder,
+				forwardedHeaderHandler, http2SettingsSpec, httpMessageLogFactory, listener, mapHandle, methodTagValue, metricsRecorder,
 				minCompressionSize, opsFactory, uriTagValue, decoder.validateHeaders());
 
 		ChannelHandler http2ServerHandler = new H2CleartextCodec(upgrader, http2SettingsSpec != null ? http2SettingsSpec.maxStreams() : null);
@@ -619,8 +630,8 @@ public final class HttpServerConfig extends ServerTransportConfig<HttpServerConf
 		if (metricsRecorder != null) {
 			if (metricsRecorder instanceof HttpServerMetricsRecorder) {
 				ChannelHandler handler = metricsRecorder instanceof ContextAwareHttpServerMetricsRecorder ?
-						new ContextAwareHttpServerMetricsHandler((ContextAwareHttpServerMetricsRecorder) metricsRecorder, uriTagValue) :
-						new HttpServerMetricsHandler((HttpServerMetricsRecorder) metricsRecorder, uriTagValue);
+						new ContextAwareHttpServerMetricsHandler((ContextAwareHttpServerMetricsRecorder) metricsRecorder, methodTagValue, uriTagValue) :
+						new HttpServerMetricsHandler((HttpServerMetricsRecorder) metricsRecorder, methodTagValue, uriTagValue);
 				p.addAfter(NettyPipeline.HttpTrafficHandler, NettyPipeline.HttpMetricsHandler, handler);
 				if (metricsRecorder instanceof MicrometerHttpServerMetricsRecorder) {
 					// For sake of performance, we can remove the ChannelMetricsHandler because the MicrometerHttpServerMetricsRecorder
@@ -637,6 +648,7 @@ public final class HttpServerConfig extends ServerTransportConfig<HttpServerConf
 			@Nullable BiPredicate<HttpServerRequest, HttpServerResponse> compressPredicate,
 			ServerCookieDecoder cookieDecoder,
 			ServerCookieEncoder cookieEncoder,
+			boolean channelOpened,
 			HttpRequestDecoderSpec decoder,
 			HttpServerFormDecoderProvider formDecoderProvider,
 			@Nullable BiFunction<ConnectionInfo, HttpRequest, ConnectionInfo> forwardedHeaderHandler,
@@ -645,14 +657,20 @@ public final class HttpServerConfig extends ServerTransportConfig<HttpServerConf
 			ConnectionObserver listener,
 			@Nullable BiFunction<? super Mono<Void>, ? super Connection, ? extends Mono<Void>> mapHandle,
 			int maxKeepAliveRequests,
+			@Nullable Function<String, String> methodTagValue,
 			@Nullable ChannelMetricsRecorder metricsRecorder,
 			int minCompressionSize,
 			@Nullable Function<String, String> uriTagValue) {
+		HttpDecoderConfig decoderConfig = new HttpDecoderConfig();
+		decoderConfig.setMaxInitialLineLength(decoder.maxInitialLineLength())
+		             .setMaxHeaderSize(decoder.maxHeaderSize())
+		             .setMaxChunkSize(decoder.maxChunkSize())
+		             .setValidateHeaders(decoder.validateHeaders())
+		             .setInitialBufferSize(decoder.initialBufferSize())
+		             .setAllowDuplicateContentLengths(decoder.allowDuplicateContentLengths());
 		p.addBefore(NettyPipeline.ReactiveBridge,
 		            NettyPipeline.HttpCodec,
-		            new HttpServerCodec(decoder.maxInitialLineLength(), decoder.maxHeaderSize(),
-		                    decoder.maxChunkSize(), decoder.validateHeaders(), decoder.initialBufferSize(),
-		                    decoder.allowDuplicateContentLengths()))
+		            new HttpServerCodec(decoderConfig))
 		 .addBefore(NettyPipeline.ReactiveBridge,
 		            NettyPipeline.HttpTrafficHandler,
 		            new HttpTrafficHandler(compressPredicate, cookieDecoder, cookieEncoder, formDecoderProvider,
@@ -670,9 +688,12 @@ public final class HttpServerConfig extends ServerTransportConfig<HttpServerConf
 
 		if (metricsRecorder != null) {
 			if (metricsRecorder instanceof HttpServerMetricsRecorder) {
-				ChannelHandler handler = metricsRecorder instanceof ContextAwareHttpServerMetricsRecorder ?
-						new ContextAwareHttpServerMetricsHandler((ContextAwareHttpServerMetricsRecorder) metricsRecorder, uriTagValue) :
-						new HttpServerMetricsHandler((HttpServerMetricsRecorder) metricsRecorder, uriTagValue);
+				AbstractHttpServerMetricsHandler handler = metricsRecorder instanceof ContextAwareHttpServerMetricsRecorder ?
+						new ContextAwareHttpServerMetricsHandler((ContextAwareHttpServerMetricsRecorder) metricsRecorder, methodTagValue, uriTagValue) :
+						new HttpServerMetricsHandler((HttpServerMetricsRecorder) metricsRecorder, methodTagValue, uriTagValue);
+				if (channelOpened) {
+					handler.channelOpened = true;
+				}
 				p.addAfter(NettyPipeline.HttpTrafficHandler, NettyPipeline.HttpMetricsHandler, handler);
 				if (metricsRecorder instanceof MicrometerHttpServerMetricsRecorder) {
 					// For sake of performance, we can remove the ChannelMetricsHandler because the MicrometerHttpServerMetricsRecorder
@@ -706,7 +727,7 @@ public final class HttpServerConfig extends ServerTransportConfig<HttpServerConf
 
 	/**
 	 * Default value whether the SSL debugging on the server side will be enabled/disabled,
-	 * fallback to SSL debugging disabled
+	 * fallback to SSL debugging disabled.
 	 */
 	static final boolean SSL_DEBUG = Boolean.parseBoolean(System.getProperty(ReactorNetty.SSL_SERVER_DEBUG, "false"));
 
@@ -765,7 +786,7 @@ public final class HttpServerConfig extends ServerTransportConfig<HttpServerConf
 		final Long maxStreams;
 
 		/**
-		 * Used when full H2 preface is received
+		 * Used when full H2 preface is received.
 		 */
 		H2CleartextCodec(Http11OrH2CleartextCodec upgrader, @Nullable Long maxStreams) {
 			this(upgrader, true, true, maxStreams);
@@ -833,6 +854,7 @@ public final class HttpServerConfig extends ServerTransportConfig<HttpServerConf
 		final ConnectionObserver                                      listener;
 		final BiFunction<? super Mono<Void>, ? super Connection, ? extends Mono<Void>>
 		                                                              mapHandle;
+		final Function<String, String>                                methodTagValue;
 		final ChannelMetricsRecorder                                  metricsRecorder;
 		final int                                                     minCompressionSize;
 		final ChannelOperations.OnSetup                               opsFactory;
@@ -849,6 +871,7 @@ public final class HttpServerConfig extends ServerTransportConfig<HttpServerConf
 				HttpMessageLogFactory httpMessageLogFactory,
 				ConnectionObserver listener,
 				@Nullable BiFunction<? super Mono<Void>, ? super Connection, ? extends Mono<Void>> mapHandle,
+				@Nullable Function<String, String> methodTagValue,
 				@Nullable ChannelMetricsRecorder metricsRecorder,
 				int minCompressionSize,
 				ChannelOperations.OnSetup opsFactory,
@@ -863,6 +886,7 @@ public final class HttpServerConfig extends ServerTransportConfig<HttpServerConf
 			this.httpMessageLogFactory = httpMessageLogFactory;
 			this.listener = listener;
 			this.mapHandle = mapHandle;
+			this.methodTagValue = methodTagValue;
 			this.metricsRecorder = metricsRecorder;
 			this.minCompressionSize = minCompressionSize;
 			this.opsFactory = opsFactory;
@@ -873,8 +897,8 @@ public final class HttpServerConfig extends ServerTransportConfig<HttpServerConf
 		protected void initChannel(Channel ch) {
 			ch.pipeline().remove(this);
 			addStreamHandlers(ch, accessLogEnabled, accessLog, compressPredicate, cookieDecoder, cookieEncoder,
-					formDecoderProvider, forwardedHeaderHandler, httpMessageLogFactory, listener, mapHandle, metricsRecorder,
-					minCompressionSize, opsFactory, uriTagValue);
+					formDecoderProvider, forwardedHeaderHandler, httpMessageLogFactory, listener, mapHandle, methodTagValue,
+					metricsRecorder, minCompressionSize, opsFactory, uriTagValue);
 		}
 	}
 
@@ -894,6 +918,7 @@ public final class HttpServerConfig extends ServerTransportConfig<HttpServerConf
 		final BiFunction<? super Mono<Void>, ? super Connection, ? extends Mono<Void>>
 		                                                              mapHandle;
 		final Long                                                    maxStreams;
+		final Function<String, String>                                methodTagValue;
 		final ChannelMetricsRecorder                                  metricsRecorder;
 		final int                                                     minCompressionSize;
 		final ChannelOperations.OnSetup                               opsFactory;
@@ -913,6 +938,7 @@ public final class HttpServerConfig extends ServerTransportConfig<HttpServerConf
 				HttpMessageLogFactory httpMessageLogFactory,
 				ConnectionObserver listener,
 				@Nullable BiFunction<? super Mono<Void>, ? super Connection, ? extends Mono<Void>> mapHandle,
+				@Nullable Function<String, String> methodTagValue,
 				@Nullable ChannelMetricsRecorder metricsRecorder,
 				int minCompressionSize,
 				ChannelOperations.OnSetup opsFactory,
@@ -950,6 +976,7 @@ public final class HttpServerConfig extends ServerTransportConfig<HttpServerConf
 			this.httpMessageLogFactory = httpMessageLogFactory;
 			this.listener = listener;
 			this.mapHandle = mapHandle;
+			this.methodTagValue = methodTagValue;
 			this.metricsRecorder = metricsRecorder;
 			this.minCompressionSize = minCompressionSize;
 			this.opsFactory = opsFactory;
@@ -957,14 +984,14 @@ public final class HttpServerConfig extends ServerTransportConfig<HttpServerConf
 		}
 
 		/**
-		 * Inline channel initializer
+		 * Inline channel initializer.
 		 */
 		@Override
 		protected void initChannel(Channel ch) {
 			ch.pipeline().remove(this);
 			addStreamHandlers(ch, accessLogEnabled, accessLog, compressPredicate, cookieDecoder, cookieEncoder,
-					formDecoderProvider, forwardedHeaderHandler, httpMessageLogFactory, listener, mapHandle, metricsRecorder,
-					minCompressionSize, opsFactory, uriTagValue);
+					formDecoderProvider, forwardedHeaderHandler, httpMessageLogFactory, listener, mapHandle, methodTagValue,
+					metricsRecorder, minCompressionSize, opsFactory, uriTagValue);
 		}
 
 		@Override
@@ -1020,6 +1047,7 @@ public final class HttpServerConfig extends ServerTransportConfig<HttpServerConf
 		final BiFunction<? super Mono<Void>, ? super Connection, ? extends Mono<Void>>
 		                                                              mapHandle;
 		final int                                                     maxKeepAliveRequests;
+		final Function<String, String>                                methodTagValue;
 		final ChannelMetricsRecorder                                  metricsRecorder;
 		final int                                                     minCompressionSize;
 		final ChannelOperations.OnSetup                               opsFactory;
@@ -1042,6 +1070,7 @@ public final class HttpServerConfig extends ServerTransportConfig<HttpServerConf
 			this.listener = listener;
 			this.mapHandle = initializer.mapHandle;
 			this.maxKeepAliveRequests = initializer.maxKeepAliveRequests;
+			this.methodTagValue = initializer.methodTagValue;
 			this.metricsRecorder = initializer.metricsRecorder;
 			this.minCompressionSize = initializer.minCompressionSize;
 			this.opsFactory = initializer.opsFactory;
@@ -1059,14 +1088,14 @@ public final class HttpServerConfig extends ServerTransportConfig<HttpServerConf
 			if (ApplicationProtocolNames.HTTP_2.equals(protocol)) {
 				configureH2Pipeline(p, accessLogEnabled, accessLog, compressPredicate, cookieDecoder, cookieEncoder,
 						enableGracefulShutdown, formDecoderProvider, forwardedHeaderHandler, http2SettingsSpec, httpMessageLogFactory, idleTimeout,
-						listener, mapHandle, metricsRecorder, minCompressionSize, opsFactory, uriTagValue, decoder.validateHeaders());
+						listener, mapHandle, methodTagValue, metricsRecorder, minCompressionSize, opsFactory, uriTagValue, decoder.validateHeaders());
 				return;
 			}
 
 			if (ApplicationProtocolNames.HTTP_1_1.equals(protocol)) {
-				configureHttp11Pipeline(p, accessLogEnabled, accessLog, compressPredicate, cookieDecoder, cookieEncoder,
+				configureHttp11Pipeline(p, accessLogEnabled, accessLog, compressPredicate, cookieDecoder, cookieEncoder, true,
 						decoder, formDecoderProvider, forwardedHeaderHandler, httpMessageLogFactory, idleTimeout, listener,
-						mapHandle, maxKeepAliveRequests, metricsRecorder, minCompressionSize, uriTagValue);
+						mapHandle, maxKeepAliveRequests, methodTagValue, metricsRecorder, minCompressionSize, uriTagValue);
 
 				// When the server is configured with HTTP/1.1 and H2 and HTTP/1.1 is negotiated,
 				// when channelActive event happens, this HttpTrafficHandler is still not in the pipeline,
@@ -1096,6 +1125,7 @@ public final class HttpServerConfig extends ServerTransportConfig<HttpServerConf
 		final BiFunction<? super Mono<Void>, ? super Connection, ? extends Mono<Void>>
 		                                                              mapHandle;
 		final int                                                     maxKeepAliveRequests;
+		final Function<String, String>                                methodTagValue;
 		final ChannelMetricsRecorder                                  metricsRecorder;
 		final int                                                     minCompressionSize;
 		final ChannelOperations.OnSetup                               opsFactory;
@@ -1120,6 +1150,7 @@ public final class HttpServerConfig extends ServerTransportConfig<HttpServerConf
 			this.idleTimeout = config.idleTimeout;
 			this.mapHandle = config.mapHandle;
 			this.maxKeepAliveRequests = config.maxKeepAliveRequests;
+			this.methodTagValue = config.methodTagValue;
 			this.metricsRecorder = config.metricsRecorderInternal();
 			this.minCompressionSize = config.minCompressionSize;
 			this.opsFactory = config.channelOperationsProvider();
@@ -1160,6 +1191,7 @@ public final class HttpServerConfig extends ServerTransportConfig<HttpServerConf
 							compressPredicate(compressPredicate, minCompressionSize),
 							cookieDecoder,
 							cookieEncoder,
+							false,
 							decoder,
 							formDecoderProvider,
 							forwardedHeaderHandler,
@@ -1168,6 +1200,7 @@ public final class HttpServerConfig extends ServerTransportConfig<HttpServerConf
 							observer,
 							mapHandle,
 							maxKeepAliveRequests,
+							methodTagValue,
 							metricsRecorder,
 							minCompressionSize,
 							uriTagValue);
@@ -1188,6 +1221,7 @@ public final class HttpServerConfig extends ServerTransportConfig<HttpServerConf
 							idleTimeout,
 							observer,
 							mapHandle,
+							methodTagValue,
 							metricsRecorder,
 							minCompressionSize,
 							opsFactory,
@@ -1214,6 +1248,7 @@ public final class HttpServerConfig extends ServerTransportConfig<HttpServerConf
 							observer,
 							mapHandle,
 							maxKeepAliveRequests,
+							methodTagValue,
 							metricsRecorder,
 							minCompressionSize,
 							opsFactory,
@@ -1227,6 +1262,7 @@ public final class HttpServerConfig extends ServerTransportConfig<HttpServerConf
 							compressPredicate(compressPredicate, minCompressionSize),
 							cookieDecoder,
 							cookieEncoder,
+							false,
 							decoder,
 							formDecoderProvider,
 							forwardedHeaderHandler,
@@ -1235,6 +1271,7 @@ public final class HttpServerConfig extends ServerTransportConfig<HttpServerConf
 							observer,
 							mapHandle,
 							maxKeepAliveRequests,
+							methodTagValue,
 							metricsRecorder,
 							minCompressionSize,
 							uriTagValue);
@@ -1255,6 +1292,7 @@ public final class HttpServerConfig extends ServerTransportConfig<HttpServerConf
 							idleTimeout,
 							observer,
 							mapHandle,
+							methodTagValue,
 							metricsRecorder,
 							minCompressionSize,
 							opsFactory,

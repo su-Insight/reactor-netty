@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021-2022 VMware, Inc. or its affiliates, All Rights Reserved.
+ * Copyright (c) 2021-2024 VMware, Inc. or its affiliates, All Rights Reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -21,6 +21,8 @@ import io.netty.channel.ChannelHandler;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelPromise;
 import io.netty.channel.socket.DatagramPacket;
+import io.netty.handler.ssl.AbstractSniHandler;
+import io.netty.handler.ssl.SslHandler;
 import reactor.netty.NettyPipeline;
 import reactor.util.Logger;
 import reactor.util.Loggers;
@@ -44,6 +46,8 @@ public abstract class AbstractChannelMetricsHandler extends ChannelDuplexHandler
 
 	final boolean onServer;
 
+	boolean channelOpened;
+
 	protected AbstractChannelMetricsHandler(@Nullable SocketAddress remoteAddress, boolean onServer) {
 		this.remoteAddress = remoteAddress;
 		this.onServer = onServer;
@@ -53,13 +57,14 @@ public abstract class AbstractChannelMetricsHandler extends ChannelDuplexHandler
 	public void channelActive(ChannelHandlerContext ctx) {
 		if (onServer) {
 			try {
+				channelOpened = true;
 				recorder().recordServerConnectionOpened(ctx.channel().localAddress());
 			}
 			catch (RuntimeException e) {
+				// Allow request-response exchange to continue, unaffected by metrics problem
 				if (log.isWarnEnabled()) {
 					log.warn(format(ctx.channel(), "Exception caught while recording metrics."), e);
 				}
-				// Allow request-response exchange to continue, unaffected by metrics problem
 			}
 		}
 		ctx.fireChannelActive();
@@ -69,13 +74,16 @@ public abstract class AbstractChannelMetricsHandler extends ChannelDuplexHandler
 	public void channelInactive(ChannelHandlerContext ctx) {
 		if (onServer) {
 			try {
-				recorder().recordServerConnectionClosed(ctx.channel().localAddress());
+				if (channelOpened) {
+					channelOpened = false;
+					recorder().recordServerConnectionClosed(ctx.channel().localAddress());
+				}
 			}
 			catch (RuntimeException e) {
+				// Allow request-response exchange to continue, unaffected by metrics problem
 				if (log.isWarnEnabled()) {
 					log.warn(format(ctx.channel(), "Exception caught while recording metrics."), e);
 				}
-				// Allow request-response exchange to continue, unaffected by metrics problem
 			}
 		}
 		ctx.fireChannelInactive();
@@ -89,11 +97,18 @@ public abstract class AbstractChannelMetricsHandler extends ChannelDuplexHandler
 			             NettyPipeline.ConnectMetricsHandler,
 			             connectMetricsHandler());
 		}
-		if (ctx.pipeline().get(NettyPipeline.SslHandler) != null) {
+		ChannelHandler sslHandler = ctx.pipeline().get(NettyPipeline.SslHandler);
+		if (sslHandler instanceof SslHandler) {
 			ctx.pipeline()
-				.addBefore(NettyPipeline.SslHandler,
-						 NettyPipeline.TlsMetricsHandler,
-						 tlsMetricsHandler());
+			   .addBefore(NettyPipeline.SslHandler,
+			             NettyPipeline.TlsMetricsHandler,
+			             tlsMetricsHandler());
+		}
+		else if (sslHandler instanceof AbstractSniHandler) {
+			ctx.pipeline()
+			   .addAfter(NettyPipeline.SslHandler,
+			            NettyPipeline.TlsMetricsHandler,
+			            tlsMetricsHandler());
 		}
 
 		ctx.fireChannelRegistered();
@@ -117,10 +132,10 @@ public abstract class AbstractChannelMetricsHandler extends ChannelDuplexHandler
 			}
 		}
 		catch (RuntimeException e) {
+			// Allow request-response exchange to continue, unaffected by metrics problem
 			if (log.isWarnEnabled()) {
 				log.warn(format(ctx.channel(), "Exception caught while recording metrics."), e);
 			}
-			// Allow request-response exchange to continue, unaffected by metrics problem
 		}
 
 		ctx.fireChannelRead(msg);
@@ -145,10 +160,10 @@ public abstract class AbstractChannelMetricsHandler extends ChannelDuplexHandler
 			}
 		}
 		catch (RuntimeException e) {
+			// Allow request-response exchange to continue, unaffected by metrics problem
 			if (log.isWarnEnabled()) {
 				log.warn(format(ctx.channel(), "Exception caught while recording metrics."), e);
 			}
-			// Allow request-response exchange to continue, unaffected by metrics problem
 		}
 
 		//"FutureReturnValueIgnored" this is deliberate
@@ -161,16 +176,17 @@ public abstract class AbstractChannelMetricsHandler extends ChannelDuplexHandler
 			recordException(ctx, remoteAddress != null ? remoteAddress : ctx.channel().remoteAddress());
 		}
 		catch (RuntimeException e) {
+			// Allow request-response exchange to continue, unaffected by metrics problem
 			if (log.isWarnEnabled()) {
 				log.warn(format(ctx.channel(), "Exception caught while recording metrics."), e);
 			}
-			// Allow request-response exchange to continue, unaffected by metrics problem
 		}
 
 		ctx.fireExceptionCaught(cause);
 	}
 
 	public abstract ChannelHandler connectMetricsHandler();
+
 	public abstract ChannelHandler tlsMetricsHandler();
 
 	public abstract ChannelMetricsRecorder recorder();
