@@ -69,6 +69,7 @@ import io.netty.channel.group.ChannelGroup;
 import io.netty.channel.group.DefaultChannelGroup;
 import io.netty.channel.nio.NioEventLoopGroup;
 import io.netty.channel.unix.DomainSocketAddress;
+import io.netty.handler.codec.compression.Brotli;
 import io.netty.handler.codec.http.DefaultFullHttpResponse;
 import io.netty.handler.codec.http.HttpClientCodec;
 import io.netty.handler.codec.http.HttpContentDecompressor;
@@ -157,6 +158,11 @@ class HttpClientTest extends BaseHttpTest {
 	static void cleanup() throws ExecutionException, InterruptedException, TimeoutException {
 		executor.shutdownGracefully()
 				.get(30, TimeUnit.SECONDS);
+	}
+
+	@BeforeAll
+	static void verifyNettyBrotliIsAvailable() {
+		assertThat(Brotli.isAvailable()).isTrue();
 	}
 
 	@Test
@@ -474,6 +480,46 @@ class HttpClientTest extends BaseHttpTest {
 	}
 
 	@Test
+	void brotliEnabled() {
+		doTestBrotli(true);
+	}
+
+	@Test
+	void brotliDisabled() {
+		doTestBrotli(false);
+	}
+
+	private void doTestBrotli(boolean brotliEnabled) {
+		String expectedResponse = brotliEnabled ? "br" : "no brotli";
+		disposableServer =
+				createServer()
+						.compress(true)
+						.handle((req, res) -> res.sendString(Mono.just(req.requestHeaders()
+								.get(HttpHeaderNames.ACCEPT_ENCODING,
+										"no brotli"))))
+						.bindNow();
+		HttpClient client = createHttpClientForContextWithPort();
+
+		if (brotliEnabled) {
+			assertThat(Brotli.isAvailable()).isTrue();
+			client = client.compress(true);
+			client.configuration().headers = client.configuration().headers()
+							.set(HttpHeaderNames.ACCEPT_ENCODING, HttpHeaderValues.BR);
+		}
+
+		StepVerifier.create(client.get()
+						.uri("/")
+						.response((r, buf) -> buf.asString()
+								.elementAt(0)
+								.zipWith(Mono.just(r))))
+				.expectNextMatches(tuple ->
+						expectedResponse.equals(tuple.getT1())
+								&& (tuple.getT2().status().code() == 200))
+				.expectComplete()
+				.verify(Duration.ofSeconds(30));
+	}
+
+	@Test
 	void gzipEnabled() {
 		doTestGzip(true);
 	}
@@ -492,9 +538,13 @@ class HttpClientTest extends BaseHttpTest {
 				                                                                "no gzip"))))
 				          .bindNow();
 		HttpClient client = createHttpClientForContextWithPort();
+		client.configuration().acceptBrotli = false;
+		client.configuration().acceptGzip = gzipEnabled;
 
 		if (gzipEnabled) {
 			client = client.compress(true);
+			client.configuration().headers = client.configuration().headers()
+			        .set(HttpHeaderNames.ACCEPT_ENCODING, HttpHeaderValues.GZIP);
 		}
 
 		StepVerifier.create(client.get()

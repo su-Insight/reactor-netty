@@ -123,6 +123,7 @@ public final class HttpClientConfig extends ClientTransportConfig<HttpClientConf
 	public int channelHash() {
 		int result = super.channelHash();
 		result = 31 * result + Boolean.hashCode(acceptGzip);
+		result = 31 * result + Boolean.hashCode(acceptBrotli);
 		result = 31 * result + Objects.hashCode(decoder);
 		result = 31 * result + _protocols;
 		result = 31 * result + Objects.hashCode(sslProvider);
@@ -218,6 +219,15 @@ public final class HttpClientConfig extends ClientTransportConfig<HttpClientConf
 	 */
 	public boolean isAcceptGzip() {
 		return acceptGzip;
+	}
+
+	/**
+	 * Return whether Brotli compression is enabled.
+	 *
+	 * @return whether Brotli compression is enabled
+	 */
+	public boolean isAcceptBrotli() {
+		return acceptBrotli;
 	}
 
 	/**
@@ -332,6 +342,7 @@ public final class HttpClientConfig extends ClientTransportConfig<HttpClientConf
 	// Protected/Package private write API
 
 	boolean acceptGzip;
+	boolean acceptBrotli;
 	String baseUrl;
 	BiFunction<? super HttpClientRequest, ? super NettyOutbound, ? extends Publisher<Void>> body;
 	Function<? super Mono<? extends Connection>, ? extends Mono<? extends Connection>> connector;
@@ -368,6 +379,7 @@ public final class HttpClientConfig extends ClientTransportConfig<HttpClientConf
 			Supplier<? extends SocketAddress> remoteAddress) {
 		super(connectionProvider, options, remoteAddress);
 		this.acceptGzip = false;
+		this.acceptBrotli = false;
 		this.cookieDecoder = ClientCookieDecoder.STRICT;
 		this.cookieEncoder = ClientCookieEncoder.STRICT;
 		this.decoder = new HttpResponseDecoderSpec();
@@ -382,6 +394,7 @@ public final class HttpClientConfig extends ClientTransportConfig<HttpClientConf
 	HttpClientConfig(HttpClientConfig parent) {
 		super(parent);
 		this.acceptGzip = parent.acceptGzip;
+		this.acceptBrotli = parent.acceptBrotli;
 		this.baseUrl = parent.baseUrl;
 		this.body = parent.body;
 		this.connector = parent.connector;
@@ -578,6 +591,7 @@ public final class HttpClientConfig extends ClientTransportConfig<HttpClientConf
 			ConnectionObserver obs,
 			ChannelOperations.OnSetup opsFactory,
 			boolean acceptGzip,
+			boolean acceptBrotli,
 			@Nullable ChannelMetricsRecorder metricsRecorder,
 			@Nullable SocketAddress proxyAddress,
 			SocketAddress remoteAddress,
@@ -592,7 +606,7 @@ public final class HttpClientConfig extends ClientTransportConfig<HttpClientConf
 		pipeline.addLast(NettyPipeline.H2ToHttp11Codec, HTTP2_STREAM_FRAME_TO_HTTP_OBJECT)
 				.addLast(NettyPipeline.HttpTrafficHandler, HTTP_2_STREAM_BRIDGE_CLIENT_HANDLER);
 
-		if (acceptGzip) {
+		if (acceptGzip || acceptBrotli) {
 			pipeline.addLast(NettyPipeline.HttpDecompressor, new HttpContentDecompressor());
 		}
 
@@ -695,6 +709,7 @@ public final class HttpClientConfig extends ClientTransportConfig<HttpClientConf
 	static void configureHttp11OrH2CleartextPipeline(
 			ChannelPipeline p,
 			boolean acceptGzip,
+			boolean acceptBrotli,
 			HttpResponseDecoderSpec decoder,
 			Http2Settings http2Settings,
 			@Nullable ChannelMetricsRecorder metricsRecorder,
@@ -726,7 +741,7 @@ public final class HttpClientConfig extends ClientTransportConfig<HttpClientConf
 		Http2FrameCodec http2FrameCodec = http2FrameCodecBuilder.build();
 
 		Http2ClientUpgradeCodec upgradeCodec = new Http2ClientUpgradeCodec(http2FrameCodec,
-				new H2CleartextCodec(http2FrameCodec, opsFactory, acceptGzip, metricsRecorder, proxyAddress, remoteAddress, uriTagValue));
+				new H2CleartextCodec(http2FrameCodec, opsFactory, acceptGzip, acceptBrotli, metricsRecorder, proxyAddress, remoteAddress, uriTagValue));
 
 		HttpClientUpgradeHandler upgradeHandler =
 				new ReactorNettyHttpClientUpgradeHandler(httpClientCodec, upgradeCodec, decoder.h2cMaxContentLength());
@@ -735,7 +750,7 @@ public final class HttpClientConfig extends ClientTransportConfig<HttpClientConf
 		 .addBefore(NettyPipeline.ReactiveBridge, NettyPipeline.H2CUpgradeHandler, upgradeHandler)
 		 .addBefore(NettyPipeline.ReactiveBridge, NettyPipeline.HttpTrafficHandler, new HttpTrafficHandler(observer));
 
-		if (acceptGzip) {
+		if (acceptGzip || acceptBrotli) {
 			p.addBefore(NettyPipeline.ReactiveBridge, NettyPipeline.HttpDecompressor, new HttpContentDecompressor());
 		}
 
@@ -760,6 +775,7 @@ public final class HttpClientConfig extends ClientTransportConfig<HttpClientConf
 	@SuppressWarnings("deprecation")
 	static void configureHttp11Pipeline(ChannelPipeline p,
 			boolean acceptGzip,
+            boolean acceptBrotli,
 			HttpResponseDecoderSpec decoder,
 			@Nullable ChannelMetricsRecorder metricsRecorder,
 			@Nullable SocketAddress proxyAddress,
@@ -776,7 +792,7 @@ public final class HttpClientConfig extends ClientTransportConfig<HttpClientConf
 				NettyPipeline.HttpCodec,
 				new HttpClientCodec(decoderConfig, decoder.failOnMissingResponse, decoder.parseHttpAfterConnectRequest));
 
-		if (acceptGzip) {
+		if (acceptGzip || acceptBrotli) {
 			p.addAfter(NettyPipeline.HttpCodec, NettyPipeline.HttpDecompressor, new HttpContentDecompressor());
 		}
 
@@ -837,6 +853,7 @@ public final class HttpClientConfig extends ClientTransportConfig<HttpClientConf
 	static final class H2CleartextCodec extends ChannelHandlerAdapter {
 
 		final boolean acceptGzip;
+		final boolean acceptBrotli;
 		final Http2FrameCodec http2FrameCodec;
 		final ChannelMetricsRecorder metricsRecorder;
 		final ChannelOperations.OnSetup opsFactory;
@@ -848,11 +865,13 @@ public final class HttpClientConfig extends ClientTransportConfig<HttpClientConf
 				Http2FrameCodec http2FrameCodec,
 				ChannelOperations.OnSetup opsFactory,
 				boolean acceptGzip,
+				boolean acceptBrotli,
 				@Nullable ChannelMetricsRecorder metricsRecorder,
 				@Nullable SocketAddress proxyAddress,
 				SocketAddress remoteAddress,
 				@Nullable Function<String, String> uriTagValue) {
 			this.acceptGzip = acceptGzip;
+			this.acceptBrotli = acceptBrotli;
 			this.http2FrameCodec = http2FrameCodec;
 			this.metricsRecorder = metricsRecorder;
 			this.opsFactory = opsFactory;
@@ -877,12 +896,12 @@ public final class HttpClientConfig extends ClientTransportConfig<HttpClientConf
 			if (responseTimeoutHandler != null) {
 				pipeline.remove(NettyPipeline.ResponseTimeoutHandler);
 				http2MultiplexHandler = new Http2MultiplexHandler(H2InboundStreamHandler.INSTANCE,
-						new H2Codec(owner, obs, opsFactory, acceptGzip, metricsRecorder, proxyAddress,
+						new H2Codec(owner, obs, opsFactory, acceptGzip, acceptBrotli, metricsRecorder, proxyAddress,
 								remoteAddress, responseTimeoutHandler.getReaderIdleTimeInMillis(), uriTagValue));
 			}
 			else {
 				http2MultiplexHandler = new Http2MultiplexHandler(H2InboundStreamHandler.INSTANCE,
-						new H2Codec(owner, obs, opsFactory, acceptGzip, metricsRecorder, proxyAddress, remoteAddress, uriTagValue));
+						new H2Codec(owner, obs, opsFactory, acceptGzip, acceptBrotli, metricsRecorder, proxyAddress, remoteAddress, uriTagValue));
 			}
 			pipeline.addAfter(ctx.name(), NettyPipeline.HttpCodec, http2FrameCodec)
 			        .addAfter(NettyPipeline.HttpCodec, NettyPipeline.H2MultiplexHandler, http2MultiplexHandler);
@@ -897,6 +916,7 @@ public final class HttpClientConfig extends ClientTransportConfig<HttpClientConf
 	static final class H2Codec extends ChannelInitializer<Channel> {
 
 		final boolean acceptGzip;
+		final boolean acceptBrotli;
 		final ChannelMetricsRecorder metricsRecorder;
 		final ConnectionObserver observer;
 		final ChannelOperations.OnSetup opsFactory;
@@ -911,12 +931,13 @@ public final class HttpClientConfig extends ClientTransportConfig<HttpClientConf
 				@Nullable ConnectionObserver observer,
 				ChannelOperations.OnSetup opsFactory,
 				boolean acceptGzip,
+				boolean acceptBrotli,
 				@Nullable ChannelMetricsRecorder metricsRecorder,
 				@Nullable SocketAddress proxyAddress,
 				SocketAddress remoteAddress,
 				@Nullable Function<String, String> uriTagValue) {
 			// Handle outbound and upgrade streams
-			this(owner, observer, opsFactory, acceptGzip, metricsRecorder, proxyAddress, remoteAddress, -1, uriTagValue);
+			this(owner, observer, opsFactory, acceptGzip, acceptBrotli, metricsRecorder, proxyAddress, remoteAddress, -1, uriTagValue);
 		}
 
 		H2Codec(
@@ -924,6 +945,7 @@ public final class HttpClientConfig extends ClientTransportConfig<HttpClientConf
 				@Nullable ConnectionObserver observer,
 				ChannelOperations.OnSetup opsFactory,
 				boolean acceptGzip,
+				boolean acceptBrotli,
 				@Nullable ChannelMetricsRecorder metricsRecorder,
 				@Nullable SocketAddress proxyAddress,
 				SocketAddress remoteAddress,
@@ -931,6 +953,7 @@ public final class HttpClientConfig extends ClientTransportConfig<HttpClientConf
 				@Nullable Function<String, String> uriTagValue) {
 			// Handle outbound and upgrade streams
 			this.acceptGzip = acceptGzip;
+			this.acceptBrotli = acceptBrotli;
 			this.metricsRecorder = metricsRecorder;
 			this.observer = observer;
 			this.opsFactory = opsFactory;
@@ -949,7 +972,7 @@ public final class HttpClientConfig extends ClientTransportConfig<HttpClientConf
 					setChannelContext(ch, owner.currentContext());
 				}
 				addStreamHandlers(ch, observer.then(new StreamConnectionObserver(owner.currentContext())), opsFactory,
-						acceptGzip, metricsRecorder, proxyAddress, remoteAddress, responseTimeoutMillis, uriTagValue);
+						acceptGzip, acceptBrotli, metricsRecorder, proxyAddress, remoteAddress, responseTimeoutMillis, uriTagValue);
 			}
 			else {
 				// Handle server pushes (inbound streams)
@@ -973,6 +996,7 @@ public final class HttpClientConfig extends ClientTransportConfig<HttpClientConf
 
 	static final class H2OrHttp11Codec extends ChannelInboundHandlerAdapter {
 		final boolean                                    acceptGzip;
+		final boolean                                    acceptBrotli;
 		final HttpResponseDecoderSpec                    decoder;
 		final Http2Settings                              http2Settings;
 		final ChannelMetricsRecorder                     metricsRecorder;
@@ -983,6 +1007,7 @@ public final class HttpClientConfig extends ClientTransportConfig<HttpClientConf
 
 		H2OrHttp11Codec(HttpClientChannelInitializer initializer, ConnectionObserver observer, SocketAddress remoteAddress) {
 			this.acceptGzip = initializer.acceptGzip;
+			this.acceptBrotli = initializer.acceptBrotli;
 			this.decoder = initializer.decoder;
 			this.http2Settings = initializer.http2Settings;
 			this.metricsRecorder = initializer.metricsRecorder;
@@ -1006,7 +1031,7 @@ public final class HttpClientConfig extends ClientTransportConfig<HttpClientConf
 					configureHttp2Pipeline(ctx.channel().pipeline(), decoder, http2Settings, observer);
 				}
 				else if (ApplicationProtocolNames.HTTP_1_1.equals(protocol)) {
-					configureHttp11Pipeline(ctx.channel().pipeline(), acceptGzip, decoder, metricsRecorder, proxyAddress, remoteAddress, uriTagValue);
+					configureHttp11Pipeline(ctx.channel().pipeline(), acceptGzip, acceptBrotli, decoder, metricsRecorder, proxyAddress, remoteAddress, uriTagValue);
 				}
 				else {
 					throw new IllegalStateException("unknown protocol: " + protocol);
@@ -1025,6 +1050,7 @@ public final class HttpClientConfig extends ClientTransportConfig<HttpClientConf
 	static final class HttpClientChannelInitializer implements ChannelPipelineConfigurer {
 
 		final boolean                                    acceptGzip;
+		final boolean                                    acceptBrotli;
 		final HttpResponseDecoderSpec                    decoder;
 		final Http2Settings                              http2Settings;
 		final ChannelMetricsRecorder                     metricsRecorder;
@@ -1036,6 +1062,7 @@ public final class HttpClientConfig extends ClientTransportConfig<HttpClientConf
 
 		HttpClientChannelInitializer(HttpClientConfig config) {
 			this.acceptGzip = config.acceptGzip;
+			this.acceptBrotli = config.acceptBrotli;
 			this.decoder = config.decoder;
 			this.http2Settings = config.http2Settings();
 			this.metricsRecorder = config.metricsRecorderInternal();
@@ -1059,7 +1086,7 @@ public final class HttpClientConfig extends ClientTransportConfig<HttpClientConf
 					               new H2OrHttp11Codec(this, observer, remoteAddress));
 				}
 				else if ((protocols & h11) == h11) {
-					configureHttp11Pipeline(channel.pipeline(), acceptGzip, decoder, metricsRecorder, proxyAddress, remoteAddress, uriTagValue);
+					configureHttp11Pipeline(channel.pipeline(), acceptGzip, acceptBrotli, decoder, metricsRecorder, proxyAddress, remoteAddress, uriTagValue);
 				}
 				else if ((protocols & h2) == h2) {
 					configureHttp2Pipeline(channel.pipeline(), decoder, http2Settings, observer);
@@ -1070,10 +1097,10 @@ public final class HttpClientConfig extends ClientTransportConfig<HttpClientConf
 			}
 			else {
 				if ((protocols & h11orH2C) == h11orH2C) {
-					configureHttp11OrH2CleartextPipeline(channel.pipeline(), acceptGzip, decoder, http2Settings, metricsRecorder, observer, opsFactory, proxyAddress, remoteAddress, uriTagValue);
+					configureHttp11OrH2CleartextPipeline(channel.pipeline(), acceptGzip, acceptBrotli, decoder, http2Settings, metricsRecorder, observer, opsFactory, proxyAddress, remoteAddress, uriTagValue);
 				}
 				else if ((protocols & h11) == h11) {
-					configureHttp11Pipeline(channel.pipeline(), acceptGzip, decoder, metricsRecorder, proxyAddress, remoteAddress, uriTagValue);
+					configureHttp11Pipeline(channel.pipeline(), acceptGzip, acceptBrotli, decoder, metricsRecorder, proxyAddress, remoteAddress, uriTagValue);
 				}
 				else if ((protocols & h2c) == h2c) {
 					configureHttp2Pipeline(channel.pipeline(), decoder, http2Settings, observer);
