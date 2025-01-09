@@ -10,7 +10,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-20.04, macos-11, windows-2022]
+        os: [ubuntu-20.04, macos-12, windows-2022]
         transport: [native, nio]
         exclude:
           # excludes native on Windows (there's none)
@@ -18,9 +18,9 @@ jobs:
             transport: native
 
     steps:
-      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11
+      - uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332
       - name: Set up JDK 1.8
-        uses: actions/setup-java@99b8673ff64fbf99d8d325f52d9a5bdedb8483e9
+        uses: actions/setup-java@b36c23c0d998641eff861008f374ee103c25ac73
         with:
           distribution: 'temurin'
           java-version: '8'
@@ -36,7 +36,7 @@ jobs:
           curl -L $download_url --output $RUNNER_TEMP/java_package.tar.gz
         shell: bash
       - name: Set up GraalVM 17
-        uses: actions/setup-java@99b8673ff64fbf99d8d325f52d9a5bdedb8483e9
+        uses: actions/setup-java@b36c23c0d998641eff861008f374ee103c25ac73
         with:
             distribution: 'jdkfile'
             jdkFile: ${{ runner.temp }}/java_package.tar.gz

@@ -55,7 +55,6 @@ import reactor.netty.Connection;
 import reactor.netty.ConnectionObserver;
 import reactor.netty.NettyOutbound;
 import reactor.netty.channel.AbortedException;
-import reactor.netty.http.HttpOperations;
 import reactor.netty.http.HttpProtocol;
 import reactor.netty.tcp.TcpClientConfig;
 import reactor.netty.transport.AddressUtils;
@@ -245,6 +244,10 @@ class HttpClientConnect extends HttpClient {
 							return;
 						}
 					}
+					else if (_config.checkProtocol(HttpClientConfig.h3)) {
+						sink.error(new IllegalArgumentException("Configured HTTP/3 protocol without TLS. Check URL scheme"));
+						return;
+					}
 				}
 
 				ConnectionObserver observer =
@@ -253,7 +256,8 @@ class HttpClientConnect extends HttpClient {
 						        .then(_config.connectionObserver())
 						        .then(new HttpIOHandlerObserver(sink, handler));
 
-				AddressResolverGroup<?> resolver = _config.resolverInternal();
+				AddressResolverGroup<?> resolver =
+						!_config.checkProtocol(HttpClientConfig.h3) ? _config.resolverInternal() : null;
 
 				_config.httpConnectionProvider()
 						.acquire(_config, observer, handler, resolver)
@@ -523,7 +527,8 @@ class HttpClientConnect extends HttpClient {
 				                        .setProtocolVersion(HttpVersion.HTTP_1_1)
 				                        .headers();
 
-				ch.path = HttpOperations.resolvePath(ch.uri());
+				// Reset to pickup the actual uri()
+				ch.path = null;
 
 				if (!defaultHeaders.isEmpty()) {
 					headers.set(defaultHeaders);

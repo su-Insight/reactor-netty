@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011-2023 VMware, Inc. or its affiliates, All Rights Reserved.
+ * Copyright (c) 2011-2024 VMware, Inc. or its affiliates, All Rights Reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -19,6 +19,7 @@ import java.net.URI;
 import java.nio.file.Path;
 import java.util.Objects;
 import java.util.concurrent.Callable;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicIntegerFieldUpdater;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.BiFunction;
@@ -44,6 +45,7 @@ import io.netty.handler.codec.http.LastHttpContent;
 import io.netty.util.ReferenceCountUtil;
 import org.reactivestreams.Publisher;
 import reactor.core.publisher.Mono;
+import reactor.core.publisher.SignalType;
 import reactor.netty.Connection;
 import reactor.netty.ConnectionObserver;
 import reactor.netty.FutureMono;
@@ -151,13 +153,9 @@ public abstract class HttpOperations<INBOUND extends NettyInbound, OUTBOUND exte
 			if (markSentHeaderAndBody(b)) {
 				HttpMessage msg = prepareHttpMessage(b);
 
-				try {
-					afterMarkSentHeaders();
-				}
-				catch (RuntimeException e) {
-					b.release();
-					throw e;
-				}
+				// If afterMarkSentHeaders throws an exception there is no need to release the ByteBuf here.
+				// It will be released by PostHeadersNettyOutbound as there are on error/cancel hooks
+				afterMarkSentHeaders();
 
 				return channel().writeAndFlush(msg);
 			}
@@ -261,11 +259,18 @@ public abstract class HttpOperations<INBOUND extends NettyInbound, OUTBOUND exte
 
 	@Override
 	public String toString() {
+		String path;
+		try {
+			path = fullPath();
+		}
+		catch (Exception e) {
+			path = "/bad-request";
+		}
 		if (isWebsocket()) {
-			return "ws{uri=" + fullPath() + ", connection=" + connection() + "}";
+			return "ws{uri=" + path + ", connection=" + connection() + "}";
 		}
 
-		return method().name() + "{uri=" + fullPath() + ", connection=" + connection() + "}";
+		return method().name() + "{uri=" + path + ", connection=" + connection() + "}";
 	}
 
 	@Override
@@ -424,7 +429,7 @@ public abstract class HttpOperations<INBOUND extends NettyInbound, OUTBOUND exte
 	 */
 	protected abstract HttpMessage outboundHttpMessage();
 
-	HttpMessage prepareHttpMessage(ByteBuf buffer) {
+	protected HttpMessage prepareHttpMessage(ByteBuf buffer) {
 		HttpMessage msg;
 		if (HttpUtil.getContentLength(outboundHttpMessage(), -1) == 0 ||
 				isContentAlwaysEmpty()) {
@@ -472,7 +477,7 @@ public abstract class HttpOperations<INBOUND extends NettyInbound, OUTBOUND exte
 
 	static final Pattern SCHEME_PATTERN = Pattern.compile("^(https?|wss?)://.*$");
 
-	protected static final class PostHeadersNettyOutbound implements NettyOutbound, Consumer<Throwable>, Runnable {
+	protected static final class PostHeadersNettyOutbound extends AtomicBoolean implements NettyOutbound {
 
 		final Mono<Void> source;
 		final HttpOperations<?, ?> parent;
@@ -481,27 +486,18 @@ public abstract class HttpOperations<INBOUND extends NettyInbound, OUTBOUND exte
 		public PostHeadersNettyOutbound(Mono<Void> source, HttpOperations<?, ?> parent, @Nullable ByteBuf msg) {
 			this.msg = msg;
 			if (msg != null) {
-				this.source = source.doOnError(this)
-				                    .doOnCancel(this);
+				this.source = source.doFinally(signalType -> {
+					if (signalType == SignalType.CANCEL || signalType == SignalType.ON_ERROR) {
+						if (msg.refCnt() > 0 && compareAndSet(false, true)) {
+							msg.release();
+						}
+					}
+				});
 			}
 			else {
 				this.source = source;
 			}
 			this.parent = parent;
-		}
-
-		@Override
-		public void run() {
-			if (msg != null && msg.refCnt() > 0) {
-				msg.release();
-			}
-		}
-
-		@Override
-		public void accept(Throwable throwable) {
-			if (msg != null && msg.refCnt() > 0) {
-				msg.release();
-			}
 		}
 
 		@Override

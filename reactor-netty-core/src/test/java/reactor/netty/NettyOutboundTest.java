@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017-2023 VMware, Inc. or its affiliates, All Rights Reserved.
+ * Copyright (c) 2017-2024 VMware, Inc. or its affiliates, All Rights Reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -33,6 +33,7 @@ import java.util.function.Consumer;
 import java.util.function.Predicate;
 import javax.net.ssl.SSLException;
 
+import io.github.nettyplus.leakdetector.junit.NettyLeakDetectorExtension;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.ByteBufAllocator;
 import io.netty.channel.ChannelFuture;
@@ -52,11 +53,13 @@ import io.netty.util.CharsetUtil;
 import io.netty.util.ReferenceCountUtil;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
 import org.reactivestreams.Publisher;
 import reactor.core.publisher.Mono;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+@ExtendWith(NettyLeakDetectorExtension.class)
 class NettyOutboundTest {
 
 	static SelfSignedCertificate ssc;
@@ -131,7 +134,7 @@ class NettyOutboundTest {
 		ChannelFuture f = channel.writeOneOutbound(1);
 
 		outbound.sendFile(Paths.get(getClass().getResource("/largeFile.txt").toURI()))
-		        .then().block();
+		        .then().block(Duration.ofSeconds(5));
 
 		assertThat(channel.inboundMessages()).isEmpty();
 		assertThat(channel.outboundMessages()).hasSize(2);
@@ -313,7 +316,7 @@ class NettyOutboundTest {
 
 		ChannelFuture f = channel.writeOneOutbound(1);
 		outbound.sendFileChunked(path, 0, Files.size(path))
-		        .then().block();
+		        .then().block(Duration.ofSeconds(5));
 
 		assertThat(channel.inboundMessages()).isEmpty();
 		assertThat(messageWritten).containsExactly(Integer.class, ChunkedNioFile.class);
